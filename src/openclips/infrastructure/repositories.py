@@ -4,8 +4,8 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from openclips.domain.clips import ClipEvent, ClipStateMachine
-from openclips.domain.jobs import JobEvent, JobStateMachine
+from openclips.domain.clips import ClipEvent, ClipStateMachine, ClipStatus
+from openclips.domain.jobs import JobEvent, JobStateMachine, JobStatus
 from openclips.domain.sources import SourceEvent, SourceKind, SourceStateMachine
 from openclips.domain.transcripts import TranscriptDocument, TranscriptSegment, TranscriptWord
 from openclips.infrastructure.models import (
@@ -28,6 +28,20 @@ class JobRepository:
 
     def get(self, job_id: UUID) -> JobRecord | None:
         return self.session.get(JobRecord, job_id)
+
+    def list_all(
+        self,
+        *,
+        status: JobStatus | None = None,
+        kind: str | None = None,
+        limit: int = 100,
+    ) -> list[JobRecord]:
+        query = self.session.query(JobRecord)
+        if status is not None:
+            query = query.filter(JobRecord.status == status)
+        if kind is not None:
+            query = query.filter(JobRecord.kind == kind)
+        return query.order_by(JobRecord.created_at.desc(), JobRecord.id).limit(limit).all()
 
     def transition(
         self, job_id: UUID, event: JobEvent, *, error: str | None = None
@@ -81,6 +95,52 @@ class ClipRepository:
             .all()
         )
 
+    def list_all(
+        self,
+        *,
+        status: ClipStatus | None = None,
+        limit: int = 100,
+    ) -> list[ClipRecord]:
+        query = self.session.query(ClipRecord)
+        if status is not None:
+            query = query.filter(ClipRecord.status == status)
+        return (
+            query.order_by(ClipRecord.selection_score.desc().nullslast(), ClipRecord.id.asc())
+            .limit(limit)
+            .all()
+        )
+
+    def set_title(self, clip_id: UUID, title: str) -> ClipRecord:
+        record = self.session.get(ClipRecord, clip_id)
+        if record is None:
+            raise KeyError(clip_id)
+        record.title = title
+        self.session.flush()
+        return record
+
+    def set_caption_edits(
+        self, clip_id: UUID, edits: list[dict[str, str]]
+    ) -> ClipRecord:
+        record = self.session.get(ClipRecord, clip_id)
+        if record is None:
+            raise KeyError(clip_id)
+        record.caption_edits = edits
+        self.session.flush()
+        return record
+
+    def set_timespan(
+        self, clip_id: UUID, *, start_time: float | None, end_time: float | None
+    ) -> ClipRecord:
+        record = self.session.get(ClipRecord, clip_id)
+        if record is None:
+            raise KeyError(clip_id)
+        if start_time is not None:
+            record.start_time = start_time
+        if end_time is not None:
+            record.end_time = end_time
+        self.session.flush()
+        return record
+
     def delete_for_source(self, source_asset_id: UUID) -> int:
         records = self.list_for_source(source_asset_id)
         for record in records:
@@ -125,6 +185,14 @@ class SourceRepository:
 
     def get(self, source_id: UUID) -> SourceAssetRecord | None:
         return self.session.get(SourceAssetRecord, source_id)
+
+    def list_all(self, *, limit: int = 100) -> list[SourceAssetRecord]:
+        return (
+            self.session.query(SourceAssetRecord)
+            .order_by(SourceAssetRecord.created_at.desc(), SourceAssetRecord.id)
+            .limit(limit)
+            .all()
+        )
 
     def get_by_idempotency_key(self, idempotency_key: str) -> SourceAssetRecord | None:
         return (

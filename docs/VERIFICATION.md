@@ -54,3 +54,14 @@ The warning is the upstream Starlette deprecation warning emitted by the current
 - Persistence: clips record `caption_path`, `caption_template`, `render_width`, `render_height`, `output_path` (migration `0005_rendered_clips`).
 - Resumability: render jobs fail durably with error text and retry replaces artifacts deterministically.
 - Ruff: passed. mypy: no issues in 32 source files. Migrations cycled cleanly; `alembic check` clean.
+
+## Phase 5 — 2026-08-26
+
+- Local suite: 150 passed, 19 skipped (PostgreSQL-gated).
+- Full suite in Compose: 169 passed.
+- Auth: fail-closed admin bearer token (`OPENCLIPS_ADMIN_TOKEN`); missing configuration yields 503 on mutations, bad credentials yield 401; reads stay public.
+- API surface under `/api/v1`: sources list/detail with transcribe and select-clips dispatch, jobs list/detail with status and kind filters, review queue with status filter and preview metadata (render/caption paths, dimensions), clip detail, PATCH edits (title/timespan) moving clips to NEEDS_REVIEW per the documented lifecycle, caption word-edit persistence, approve/reject transitions with 409 conflicts, bulk actions with per-item results, render dispatch, and an HTML dashboard.
+- API documentation served by FastAPI at `/docs`.
+- Live smoke checks against Compose: `/docs`, `/api/v1/clips`, `/api/v1/dashboard` returned 200; unauthenticated approve returned 503 without a configured token.
+- Operational fix: shared integration fixture (`tests/integration/conftest.py`) drops the alembic stamp after tests so `alembic upgrade head` always rebuilds cleanly.
+- Ruff: passed. mypy: no issues in 37 source files.

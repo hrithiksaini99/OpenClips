@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     caption_template: str = "minimal"
     render_width: int = Field(default=1080, ge=64)
     render_height: int = Field(default=1920, ge=64)
+    admin_token: str = ""
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, ge=1)
     log_level: str = "INFO"

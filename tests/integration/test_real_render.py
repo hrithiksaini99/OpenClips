@@ -1,14 +1,11 @@
 """End-to-end render test producing a real 9:16 artifact verified with FFprobe."""
 
-import os
 import shutil
 import subprocess
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from openclips.application.rendering import RenderCoordinator
@@ -17,7 +14,6 @@ from openclips.domain.clips import ClipEvent
 from openclips.domain.sources import SourceEvent, SourceKind
 from openclips.domain.transcripts import TranscriptDocument, TranscriptSegment, TranscriptWord
 from openclips.infrastructure.media_storage import MediaStorage, read_file_chunks
-from openclips.infrastructure.models import Base
 from openclips.infrastructure.repositories import (
     ClipRepository,
     JobRepository,
@@ -32,17 +28,6 @@ pytestmark = pytest.mark.integration
 FFMPEG = shutil.which("ffmpeg")
 
 
-@pytest.fixture
-def session() -> Iterator[Session]:
-    url = os.getenv("DATABASE_URL")
-    if not url:
-        pytest.skip("DATABASE_URL is not configured")
-    engine = create_engine(url)
-    Base.metadata.create_all(engine)
-    with Session(engine) as value:
-        yield value
-        value.rollback()
-    Base.metadata.drop_all(engine)
 
 
 def _make_tiny_mp4(destination: Path) -> None:

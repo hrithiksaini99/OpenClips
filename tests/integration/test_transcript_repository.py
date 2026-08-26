@@ -1,12 +1,9 @@
 """PostgreSQL persistence tests for normalized transcripts."""
 
-import os
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from openclips.domain.sources import SourceKind
@@ -15,23 +12,12 @@ from openclips.domain.transcripts import (
     TranscriptSegment,
     TranscriptWord,
 )
-from openclips.infrastructure.models import Base, SourceAssetRecord
+from openclips.infrastructure.models import SourceAssetRecord
 from openclips.infrastructure.repositories import SourceRepository, TranscriptRepository
 
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture
-def session() -> Iterator[Session]:
-    url = os.getenv("DATABASE_URL")
-    if not url:
-        pytest.skip("DATABASE_URL is not configured")
-    engine = create_engine(url)
-    Base.metadata.create_all(engine)
-    with Session(engine) as value:
-        yield value
-        value.rollback()
-    Base.metadata.drop_all(engine)
 
 
 def _source() -> SourceAssetRecord:

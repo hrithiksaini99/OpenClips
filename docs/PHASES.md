@@ -81,7 +81,7 @@ Verification evidence (2026-08-26): 158 tests passed in the Compose API containe
 
 ## Phase 5 — Review dashboard and API
 
-Status: planned
+Status: verified
 
 Depends on: Phase 0 verified; Phase 4 verified for preview integration.
 
@@ -90,6 +90,8 @@ Deliverables: admin auth, source/job/clip API, review queue, preview metadata, e
 Acceptance criteria: unauthenticated users cannot mutate content; a creator can review/edit/approve/reject one or many clips; edits trigger documented lifecycle behavior.
 
 Verification gate: API contract tests and browser-level smoke tests.
+
+Verification evidence (2026-08-26): 169 tests passed in the Compose API container with PostgreSQL. Contract tests cover fail-closed admin bearer auth (missing token 503, wrong token 401), public catalog reads, review-queue filters, edit/approve/reject lifecycle transitions with conflicts surfaced as HTTP 409, per-item bulk results, caption-edit persistence, and job dispatch endpoints. Browser-level smoke checks against the live Compose API returned 200 for `/docs`, `/api/v1/clips`, and the HTML dashboard, and 503 for mutations while no admin token is configured. Integration fixtures now leave an unstamped empty database so `alembic upgrade head` reliably rebuilds it; migrations cycled cleanly and `alembic check` reported no new operations. Ruff and mypy passed. Phase 6 may now begin.
 
 ## Phase 6 — Scheduling and platform publishing
 

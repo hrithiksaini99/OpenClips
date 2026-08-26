@@ -62,6 +62,7 @@ class ClipRecord(Base):
     caption_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
     render_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     render_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    caption_edits: Mapped[list[dict[str, str]] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

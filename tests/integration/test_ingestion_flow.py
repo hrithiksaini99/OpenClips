@@ -1,19 +1,17 @@
 """End-to-end ingestion flow tests exercising the coordinator, storage, and adapters."""
 
-import os
 import shutil
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from openclips.application.ingestion import IngestionCoordinator
 from openclips.domain.sources import SourceStatus
 from openclips.infrastructure.media_storage import MediaStorage, read_file_chunks
-from openclips.infrastructure.models import Base, SourceAssetRecord
+from openclips.infrastructure.models import SourceAssetRecord
 from openclips.infrastructure.repositories import SourceRepository
 from openclips.providers.local_upload import LocalUploadIngestor, UnsupportedUploadError
 
@@ -23,17 +21,6 @@ FFMPEG = shutil.which("ffmpeg")
 FFPROBE = shutil.which("ffprobe")
 
 
-@pytest.fixture
-def session() -> Iterator[Session]:
-    url = os.getenv("DATABASE_URL")
-    if not url:
-        pytest.skip("DATABASE_URL is not configured")
-    engine = create_engine(url)
-    Base.metadata.create_all(engine)
-    with Session(engine) as value:
-        yield value
-        value.rollback()
-    Base.metadata.drop_all(engine)
 
 
 @pytest.fixture
