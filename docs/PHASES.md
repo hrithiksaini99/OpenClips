@@ -67,7 +67,7 @@ Verification evidence (2026-08-26): 134 tests passed in the Compose API containe
 
 ## Phase 4 — Rendering and captioning
 
-Status: planned
+Status: verified
 
 Depends on: Phase 2 verified; Phase 3 verified for end-to-end rendering.
 
@@ -76,6 +76,8 @@ Deliverables: 9:16 rendering, caption templates, word highlighting, profanity ma
 Acceptance criteria: fixture clips render playable vertical media; edited words appear in subtitles; built-in templates validate; rendering failure is resumable.
 
 Verification gate: FFprobe assertions, subtitle tests, and sample artifact review.
+
+Verification evidence (2026-08-26): 158 tests passed in the Compose API container with PostgreSQL and real FFmpeg/FFprobe. A real render produced a playable 1080x1920 MP4 from a fixture clip with burned karaoke captions; FFprobe asserted video/audio streams and dimensions, and the caption artifact contained the edited word. All six built-in templates validate; SRT/ASS generation is deterministic with word highlighting (`\kf` tags), transcript edits, and opt-in profanity masking. The renderer builds shell-free argv behind an injectable runner with center/speaker crop strategies. Rendered artifacts persist on clips (migration `0005_rendered_clips`); failed renders are resumable through job retry. Ruff and mypy passed; migrations cycled cleanly with `alembic check` clean. Phase 5 may now begin.
 
 ## Phase 5 — Review dashboard and API
 

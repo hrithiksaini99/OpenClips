@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from openclips.application.clipping import SELECT_CLIPS_JOB_KIND, ClipSelectionCoordinator
 from openclips.application.health import make_database_probe
+from openclips.application.rendering import RENDER_CLIP_JOB_KIND, RenderCoordinator
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
 from openclips.config import Settings
+from openclips.domain.captions import CaptionStyle, get_template
 from openclips.domain.jobs import JobEvent, JobStatus
 from openclips.domain.selection import SelectionBounds
 from openclips.infrastructure.db import make_engine
@@ -26,6 +28,7 @@ from openclips.infrastructure.repositories import (
 )
 from openclips.providers.faster_whisper_provider import FasterWhisperProvider
 from openclips.providers.llm import ClipRefiner, HeuristicClipRefiner
+from openclips.providers.renderer import FFmpegRenderer
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -78,6 +81,32 @@ def make_select_clips_handler(refiner: ClipRefiner, bounds: SelectionBounds) -> 
     return handle
 
 
+def make_render_handler(
+    renderer: FFmpegRenderer,
+    storage: MediaStorage,
+    style: CaptionStyle,
+    width: int,
+    height: int,
+) -> Handler:
+    """Build a handler that executes render jobs inside a worker session."""
+
+    def handle(session: Session, job: JobRecord) -> None:
+        coordinator = RenderCoordinator(
+            clips=ClipRepository(session),
+            sources=SourceRepository(session),
+            transcripts=TranscriptRepository(session),
+            jobs=JobRepository(session),
+            renderer=renderer,
+            storage=storage,
+            style=style,
+            width=width,
+            height=height,
+        )
+        coordinator.run(job)
+
+    return handle
+
+
 def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handler]:
     """Register one handler per supported job kind."""
     provider = FasterWhisperProvider(
@@ -93,6 +122,13 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
     return {
         TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage),
         SELECT_CLIPS_JOB_KIND: make_select_clips_handler(HeuristicClipRefiner(), bounds),
+        RENDER_CLIP_JOB_KIND: make_render_handler(
+            FFmpegRenderer(),
+            storage,
+            get_template(settings.caption_template),
+            settings.render_width,
+            settings.render_height,
+        ),
     }
 
 

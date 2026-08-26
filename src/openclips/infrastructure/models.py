@@ -58,6 +58,10 @@ class ClipRecord(Base):
     end_time: Mapped[float | None] = mapped_column(Float, nullable=True)
     selection_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     output_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    caption_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    caption_template: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    render_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    render_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

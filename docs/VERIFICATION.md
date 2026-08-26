@@ -43,3 +43,14 @@ The warning is the upstream Starlette deprecation warning emitted by the current
 - Persistence: clips gained `source_asset_id`, `title`, `start_time`, `end_time`, `selection_score` (migration `0004_clip_selection`); re-selection replaces previous clips deterministically; worker handles the `select_clips` job kind end-to-end.
 - Operational fix: shared dev-database drift from host-run integration tests no longer wedges the gate — downgrades tolerate missing objects and `downgrade base && upgrade head` self-heals.
 - Ruff: passed. mypy: no issues in 28 source files. Migrations cycled cleanly; `alembic check` clean.
+
+## Phase 4 — 2026-08-26
+
+- Local suite: 139 passed, 18 skipped (PostgreSQL-gated).
+- Full suite in Compose (API container, PostgreSQL + real FFmpeg): 158 passed.
+- Sample artifact review: FFmpeg rendered a fixture clip into a 1080x1920 H.264/AAC MP4 with burned karaoke captions; FFprobe asserted streams, dimensions, and container format.
+- Captions: six validated built-in templates (minimal, bold, karaoke, podcast, high_contrast, clean); deterministic SRT cues plus ASS with per-word `\kf` highlight timing for word-highlight styles; transcript edits and opt-in profanity masking apply before rendering and appear in subtitles.
+- Renderer: shell-free argv construction, injected process runner, center and speaker-aware crop abstractions, ffprobe metadata parsing; failures raise `RenderError` with a truncated stderr tail.
+- Persistence: clips record `caption_path`, `caption_template`, `render_width`, `render_height`, `output_path` (migration `0005_rendered_clips`).
+- Resumability: render jobs fail durably with error text and retry replaces artifacts deterministically.
+- Ruff: passed. mypy: no issues in 32 source files. Migrations cycled cleanly; `alembic check` clean.

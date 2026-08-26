@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     max_clips: int = Field(default=10, ge=3, le=30)
     min_clip_seconds: float = Field(default=20.0, ge=1.0)
     max_clip_seconds: float = Field(default=90.0, ge=1.0)
+    caption_template: str = "minimal"
+    render_width: int = Field(default=1080, ge=64)
+    render_height: int = Field(default=1920, ge=64)
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, ge=1)
     log_level: str = "INFO"
