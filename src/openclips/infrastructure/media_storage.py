@@ -59,6 +59,11 @@ class MediaStorage:
     def root(self) -> Path:
         return self._root
 
+    def resolve(self, key: str) -> Path:
+        """Return the absolute path for a storage key after validating it."""
+        parts = _validate_key(key)
+        return self._root.joinpath(*parts)
+
     def write_stream(self, key: str, chunks: Iterable[bytes]) -> StoredMedia:
         parts = _validate_key(key)
         self._root.mkdir(parents=True, exist_ok=True)

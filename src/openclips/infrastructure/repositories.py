@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -6,15 +7,21 @@ from sqlalchemy.orm import Session
 from openclips.domain.clips import ClipEvent, ClipStateMachine
 from openclips.domain.jobs import JobEvent, JobStateMachine
 from openclips.domain.sources import SourceEvent, SourceKind, SourceStateMachine
-from openclips.infrastructure.models import ClipRecord, JobRecord, SourceAssetRecord
+from openclips.domain.transcripts import TranscriptDocument, TranscriptSegment, TranscriptWord
+from openclips.infrastructure.models import (
+    ClipRecord,
+    JobRecord,
+    SourceAssetRecord,
+    TranscriptRecord,
+)
 
 
 class JobRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def create(self, kind: str) -> JobRecord:
-        record = JobRecord(kind=kind)
+    def create(self, kind: str, *, payload: str | None = None) -> JobRecord:
+        record = JobRecord(kind=kind, payload=payload)
         self.session.add(record)
         self.session.flush()
         return record
@@ -22,13 +29,17 @@ class JobRepository:
     def get(self, job_id: UUID) -> JobRecord | None:
         return self.session.get(JobRecord, job_id)
 
-    def transition(self, job_id: UUID, event: JobEvent) -> JobRecord:
+    def transition(
+        self, job_id: UUID, event: JobEvent, *, error: str | None = None
+    ) -> JobRecord:
         record = self.session.get(JobRecord, job_id)
         if record is None:
             raise KeyError(job_id)
         record.status = JobStateMachine.transition(record.status, event)
         if event in (JobEvent.START, JobEvent.RETRY):
             record.attempts += 1
+        if error is not None:
+            record.error = error
         self.session.flush()
         return record
 
@@ -114,3 +125,79 @@ class SourceRepository:
         record.status = SourceStateMachine.transition(record.status, SourceEvent.SUCCEED)
         self.session.flush()
         return record
+
+
+def _document_to_payload(document: TranscriptDocument) -> dict[str, Any]:
+    return {
+        "language": document.language,
+        "duration": document.duration,
+        "segments": [
+            {
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text,
+                "words": [
+                    {
+                        "text": word.text,
+                        "start": word.start,
+                        "end": word.end,
+                        "probability": word.probability,
+                    }
+                    for word in segment.words
+                ],
+            }
+            for segment in document.segments
+        ],
+    }
+
+
+def _payload_to_document(payload: dict[str, Any]) -> TranscriptDocument:
+    segments = tuple(
+        TranscriptSegment(
+            start=segment["start"],
+            end=segment["end"],
+            text=segment["text"],
+            words=tuple(
+                TranscriptWord(
+                    text=word["text"],
+                    start=word["start"],
+                    end=word["end"],
+                    probability=word["probability"],
+                )
+                for word in segment["words"]
+            ),
+        )
+        for segment in payload["segments"]
+    )
+    return TranscriptDocument(
+        language=payload["language"], duration=payload["duration"], segments=segments
+    )
+
+
+class TranscriptRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def upsert_for_source(self, source_id: UUID, document: TranscriptDocument) -> TranscriptRecord:
+        record = self.get_for_source(source_id)
+        if record is None:
+            record = TranscriptRecord(source_id=source_id)
+            self.session.add(record)
+        record.language = document.language
+        record.duration = document.duration
+        record.payload = _document_to_payload(document)
+        self.session.flush()
+        return record
+
+    def get_for_source(self, source_id: UUID) -> TranscriptRecord | None:
+        return (
+            self.session.query(TranscriptRecord)
+            .filter(TranscriptRecord.source_id == source_id)
+            .one_or_none()
+        )
+
+    def get_document(self, source_id: UUID) -> TranscriptDocument | None:
+        record = self.get_for_source(source_id)
+        if record is None:
+            return None
+        return _payload_to_document(record.payload)

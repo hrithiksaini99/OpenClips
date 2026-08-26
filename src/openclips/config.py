@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     media_root: Path = Path("./data/media")
     worker_concurrency: int = Field(default=2, ge=1)
+    transcription_model_size: str = "base"
+    transcription_device: str = "cpu"
+    transcription_compute_type: str = "int8"
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, ge=1)
     log_level: str = "INFO"

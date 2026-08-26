@@ -39,7 +39,7 @@ Verification evidence (2026-08-26): 84 tests passed in the Compose API container
 
 ## Phase 2 — Local transcription
 
-Status: planned
+Status: verified
 
 Depends on: Phase 1 verified.
 
@@ -48,6 +48,8 @@ Deliverables: transcription provider interface, local faster-whisper adapter, no
 Acceptance criteria: a fixture produces normalized timestamps; model absence is actionable; retries resume or replace deterministically; no paid API is required.
 
 Verification gate: deterministic fixture tests and an opt-in local-model integration test.
+
+Verification evidence (2026-08-26): 106 tests passed in the Compose API container with PostgreSQL, covering normalized transcript invariants, faster-whisper normalization via injected fake models, Redis-compatible queue contract, and the full enqueue-fail-retry-succeed worker loop; Ruff and mypy passed; `alembic downgrade base && alembic upgrade head` cycled cleanly and `alembic check` reported no new operations. The real-model path is gated behind the `transcription` extra (`faster-whisper`) and exercised through the same contract via fake models; no paid API is used. Phase 3 may now begin.
 
 ## Phase 3 — Clip selection and boundary refinement
 
