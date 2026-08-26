@@ -48,14 +48,45 @@ class ClipRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def create(self, source_path: str) -> ClipRecord:
-        record = ClipRecord(source_path=source_path)
+    def create(
+        self,
+        source_path: str = "",
+        *,
+        source_asset_id: UUID | None = None,
+        title: str | None = None,
+        start_time: float | None = None,
+        end_time: float | None = None,
+        selection_score: float | None = None,
+    ) -> ClipRecord:
+        record = ClipRecord(
+            source_path=source_path,
+            source_asset_id=source_asset_id,
+            title=title,
+            start_time=start_time,
+            end_time=end_time,
+            selection_score=selection_score,
+        )
         self.session.add(record)
         self.session.flush()
         return record
 
     def get(self, clip_id: UUID) -> ClipRecord | None:
         return self.session.get(ClipRecord, clip_id)
+
+    def list_for_source(self, source_asset_id: UUID) -> list[ClipRecord]:
+        return (
+            self.session.query(ClipRecord)
+            .filter(ClipRecord.source_asset_id == source_asset_id)
+            .order_by(ClipRecord.start_time.asc(), ClipRecord.id.asc())
+            .all()
+        )
+
+    def delete_for_source(self, source_asset_id: UUID) -> int:
+        records = self.list_for_source(source_asset_id)
+        for record in records:
+            self.session.delete(record)
+        self.session.flush()
+        return len(records)
 
     def transition(self, clip_id: UUID, event: ClipEvent) -> ClipRecord:
         record = self.session.get(ClipRecord, clip_id)

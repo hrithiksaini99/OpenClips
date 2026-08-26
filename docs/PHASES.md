@@ -53,7 +53,7 @@ Verification evidence (2026-08-26): 106 tests passed in the Compose API containe
 
 ## Phase 3 — Clip selection and boundary refinement
 
-Status: planned
+Status: verified
 
 Depends on: Phase 2 verified.
 
@@ -62,6 +62,8 @@ Deliverables: transcript-first candidate selection, configurable 3–30 clip max
 Acceptance criteria: coherent fixture transcripts produce bounded candidates without forcing clip count; malformed model output is rejected safely; candidates are reproducible from the same input.
 
 Verification gate: golden transcript tests and provider contract tests.
+
+Verification evidence (2026-08-26): 134 tests passed in the Compose API container with PostgreSQL. Golden transcript tests prove bounded non-overlapping candidates, reproducibility across runs, dead-air trimming to word boundaries, minimum-duration growth into neighbor segments, maximum-duration shrinking by edge score, and no forced clip count (short transcripts yield none). Provider contract tests cover the `ClipRefiner` interface, strict-JSON local LLM refiner parsing, nine malformed-output rejection cases, and safe fallback to heuristic candidates. Selection clips persist with timespans, titles, and scores through migration `0004_clip_selection`; migrations cycled up/down/up cleanly with `alembic check` clean; Ruff and mypy passed. Phase 4 may now begin.
 
 ## Phase 4 — Rendering and captioning
 

@@ -8,20 +8,24 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from openclips.application.clipping import SELECT_CLIPS_JOB_KIND, ClipSelectionCoordinator
 from openclips.application.health import make_database_probe
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
 from openclips.config import Settings
 from openclips.domain.jobs import JobEvent, JobStatus
+from openclips.domain.selection import SelectionBounds
 from openclips.infrastructure.db import make_engine
 from openclips.infrastructure.media_storage import MediaStorage
 from openclips.infrastructure.models import JobRecord
 from openclips.infrastructure.queue import InMemoryJobQueue, RedisJobQueue
 from openclips.infrastructure.repositories import (
+    ClipRepository,
     JobRepository,
     SourceRepository,
     TranscriptRepository,
 )
 from openclips.providers.faster_whisper_provider import FasterWhisperProvider
+from openclips.providers.llm import ClipRefiner, HeuristicClipRefiner
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -57,6 +61,23 @@ def make_transcribe_handler(provider: FasterWhisperProvider, storage: MediaStora
     return handle
 
 
+def make_select_clips_handler(refiner: ClipRefiner, bounds: SelectionBounds) -> Handler:
+    """Build a handler that executes clip-selection jobs inside a worker session."""
+
+    def handle(session: Session, job: JobRecord) -> None:
+        coordinator = ClipSelectionCoordinator(
+            sources=SourceRepository(session),
+            transcripts=TranscriptRepository(session),
+            clips=ClipRepository(session),
+            jobs=JobRepository(session),
+            refiner=refiner,
+            bounds=bounds,
+        )
+        coordinator.run(job)
+
+    return handle
+
+
 def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handler]:
     """Register one handler per supported job kind."""
     provider = FasterWhisperProvider(
@@ -64,7 +85,15 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
         device=settings.transcription_device,
         compute_type=settings.transcription_compute_type,
     )
-    return {TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage)}
+    bounds = SelectionBounds(
+        max_clips=settings.max_clips,
+        min_duration_seconds=settings.min_clip_seconds,
+        max_duration_seconds=settings.max_clip_seconds,
+    )
+    return {
+        TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage),
+        SELECT_CLIPS_JOB_KIND: make_select_clips_handler(HeuristicClipRefiner(), bounds),
+    }
 
 
 def process_once(

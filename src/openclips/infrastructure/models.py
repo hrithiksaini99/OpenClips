@@ -46,10 +46,17 @@ class ClipRecord(Base):
     __tablename__ = "clips"
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
-    source_path: Mapped[str] = mapped_column(String(1024))
+    source_path: Mapped[str] = mapped_column(String(1024), default="")
+    source_asset_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("source_assets.id"), nullable=True, index=True
+    )
     status: Mapped[ClipStatus] = mapped_column(
         Enum(ClipStatus, native_enum=False), default=ClipStatus.GENERATING
     )
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    start_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    selection_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     output_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

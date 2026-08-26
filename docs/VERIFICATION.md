@@ -33,3 +33,13 @@ The warning is the upstream Starlette deprecation warning emitted by the current
 - Worker is real: `process_once` claims payloads, owns lifecycle transitions, persists failures with attempt counts, and marks unknown job kinds FAILED instead of crashing.
 - Resumability proof: scripted provider fails once then succeeds through retry — transcript replaced, job SUCCEEDED, attempts tracked.
 - Ruff: passed. mypy: no issues in 24 source files. Migrations cycled up/down/up cleanly; `alembic check` clean.
+
+## Phase 3 — 2026-08-26
+
+- Local suite: 116 passed, 18 skipped (PostgreSQL-gated).
+- Full suite in Compose (API container, PostgreSQL + ffmpeg): 134 passed.
+- Deterministic engine: hook/rate segment scoring, min-duration growth, max-duration shrink, word-boundary dead-air trim, overlap rejection, count never forced; same input always yields the same candidates (`SelectionBounds` enforces 3–30 clips, ordered durations).
+- Refiner contract: `ClipRefiner` base, `HeuristicClipRefiner` baseline, `LocalLlmClipRefiner` strict-JSON adapter; malformed output raises `MalformedModelOutputError` and the coordinator falls back to heuristic candidates safely.
+- Persistence: clips gained `source_asset_id`, `title`, `start_time`, `end_time`, `selection_score` (migration `0004_clip_selection`); re-selection replaces previous clips deterministically; worker handles the `select_clips` job kind end-to-end.
+- Operational fix: shared dev-database drift from host-run integration tests no longer wedges the gate — downgrades tolerate missing objects and `downgrade base && upgrade head` self-heals.
+- Ruff: passed. mypy: no issues in 28 source files. Migrations cycled cleanly; `alembic check` clean.

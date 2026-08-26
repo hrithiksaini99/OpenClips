@@ -14,6 +14,10 @@ branch_labels = None
 depends_on = None
 
 
+def _table_exists(name: str) -> bool:
+    return sa.inspect(op.get_bind()).has_table(name)
+
+
 def upgrade() -> None:
     op.add_column("jobs", sa.Column("payload", sa.String(length=255), nullable=True))
     op.create_table(
@@ -38,6 +42,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_transcripts_source_id", table_name="transcripts")
+    if not _table_exists("transcripts"):
+        return
+    op.execute("DROP INDEX IF EXISTS ix_transcripts_source_id")
     op.execute("DROP TABLE IF EXISTS transcripts")
-    op.drop_column("jobs", "payload")
+    op.execute("ALTER TABLE jobs DROP COLUMN IF EXISTS payload")
