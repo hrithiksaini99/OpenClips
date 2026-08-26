@@ -1,0 +1,11 @@
+.git
+.env
+.venv
+.worktrees
+.superpowers
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+data
+*.pyc

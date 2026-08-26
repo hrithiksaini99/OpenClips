@@ -17,7 +17,11 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://openclips:openclips@localhost:5432/openclips"
     redis_url: str = "redis://localhost:6379/0"
     media_root: Path = Path("./data/media")
+    model_cache_root: Path = Path("/root/.cache/huggingface/hub")
+    max_upload_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
     worker_concurrency: int = Field(default=2, ge=1)
+    outbox_batch_size: int = Field(default=50, ge=1, le=1000)
+    outbox_backoff_cap_seconds: int = Field(default=300, ge=1)
     transcription_model_size: str = "base"
     transcription_device: str = "cpu"
     transcription_compute_type: str = "int8"
