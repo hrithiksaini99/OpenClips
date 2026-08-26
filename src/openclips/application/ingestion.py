@@ -73,17 +73,20 @@ class IngestionCoordinator:
         try:
             existing = self.repository.get_by_idempotency_key(digest)
             if existing is not None:
-                return existing
-
-            record = self.repository.create(
-                source_kind=source_kind,
-                original_locator=original_locator,
-                external_id=external_id,
-                idempotency_key=digest,
-                display_name=display_name,
-                retain_until=self._clock() + timedelta(days=SOURCE_RETENTION_DAYS),
-            )
-            key = _storage_key(source_kind, digest, display_name)
+                if existing.status is SourceStatus.READY:
+                    return existing
+                self._recover(existing.id)
+                record = existing
+            else:
+                record = self.repository.create(
+                    source_kind=source_kind,
+                    original_locator=original_locator,
+                    external_id=external_id,
+                    idempotency_key=digest,
+                    display_name=display_name,
+                    retain_until=self._clock() + timedelta(days=SOURCE_RETENTION_DAYS),
+                )
+            key = _storage_key(record.source_kind, digest, record.display_name)
             try:
                 self.repository.transition(record.id, SourceEvent.START)
                 stored = self.storage.write_stream(key, _spool_chunks(spool))
@@ -106,6 +109,19 @@ class IngestionCoordinator:
         if record.status == SourceStatus.READY:
             return record
         return self.repository.transition(record.id, SourceEvent.RETRY)
+
+    def _recover(self, source_id: UUID) -> None:
+        """Move an incomplete source back to PENDING so it can be ingested again."""
+        record = self.repository.get(source_id)
+        if record is None:
+            raise KeyError(source_id)
+        if record.status is SourceStatus.PENDING:
+            return
+        if record.status is SourceStatus.INGESTING:
+            self.repository.transition(
+                record.id, SourceEvent.FAIL, error="Recovered from interrupted ingestion"
+            )
+        self.repository.transition(source_id, SourceEvent.RETRY)
 
     def _spool(self, chunks: Iterable[bytes]) -> tuple[str, BinaryIO]:
         hasher = hashlib.sha256()

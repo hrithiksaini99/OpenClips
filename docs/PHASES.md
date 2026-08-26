@@ -25,7 +25,7 @@ Verification evidence (2026-08-26): Docker Compose rebuilt successfully; Postgre
 
 ## Phase 1 — Media ingestion
 
-Status: planned
+Status: verified
 
 Depends on: Phase 0 verified.
 
@@ -34,6 +34,8 @@ Deliverables: local upload and YouTube video adapters, source metadata, safe fil
 Acceptance criteria: supported local files and YouTube URLs produce registered source assets; malformed inputs fail clearly; retries do not duplicate assets; source retention metadata is recorded.
 
 Verification gate: fixture-based adapter tests plus a local FFmpeg/media smoke test.
+
+Verification evidence (2026-08-26): 84 tests passed in the Compose API container with PostgreSQL, including adapter contract tests, idempotent replay of a real FFmpeg-generated MP4, FFprobe container validation, and failed-source recovery; Ruff and mypy passed; `alembic downgrade base && alembic upgrade head` cycled cleanly and `alembic check` reported no new operations. Phase 2 may now begin.
 
 ## Phase 2 — Local transcription
 
