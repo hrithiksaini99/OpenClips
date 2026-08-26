@@ -18,6 +18,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from openclips.domain.clips import ClipStatus
 from openclips.domain.jobs import JobStatus
+from openclips.domain.publishing import Platform, PublicationStatus
 from openclips.domain.sources import SourceKind, SourceStatus
 
 
@@ -63,6 +64,29 @@ class ClipRecord(Base):
     render_width: Mapped[int | None] = mapped_column(Integer, nullable=True)
     render_height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     caption_edits: Mapped[list[dict[str, str]] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PublicationRecord(Base):
+    __tablename__ = "publication_records"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    clip_id: Mapped[UUID] = mapped_column(ForeignKey("clips.id"), index=True)
+    platform: Mapped[Platform] = mapped_column(
+        Enum(Platform, native_enum=False), default=Platform.INSTAGRAM_REELS
+    )
+    status: Mapped[PublicationStatus] = mapped_column(
+        Enum(PublicationStatus, native_enum=False), default=PublicationStatus.SCHEDULED
+    )
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    external_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

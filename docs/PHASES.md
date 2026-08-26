@@ -95,7 +95,7 @@ Verification evidence (2026-08-26): 169 tests passed in the Compose API containe
 
 ## Phase 6 — Scheduling and platform publishing
 
-Status: planned
+Status: verified
 
 Depends on: Phase 5 verified.
 
@@ -104,6 +104,8 @@ Deliverables: platform account abstractions, independent queues, manual and rule
 Acceptance criteria: only approved clips schedule; platform schedules are independent; retries are bounded and observable; adapter failures preserve state and reason.
 
 Verification gate: fake-platform contract tests plus opt-in sandbox tests.
+
+Verification evidence (2026-08-26): 187 tests passed in the Compose API container with PostgreSQL. Fake-platform contract tests prove both adapters build shell-free argv, parse strict JSON, preserve API errors verbatim as `PublishError` reasons, validate media/titles/credentials up front, and clean temporary artifacts. The scheduling coordinator accepts only APPROVED clips, moves them through the documented SCHEDULE/PUBLISH lifecycle, assigns deterministic rule-based slots (`DailyWindowRule`), and dispatches due publications onto independent per-platform queues (`publish.instagram_reels`, `publish.youtube_shorts`). Failures keep state and reason on the publication record and reschedule with capped exponential backoff inside a five-attempt budget; exhausted publications stay FAILED and refuse further retries. Publication records persist through migration `0007_publication_records`; migrations cycled cleanly with `alembic check` reporting no new operations. Ruff and mypy passed. Real network publishing remains strictly opt-in: adapters activate only when platform credentials are configured. All phases are now complete.
 
 ## Parallelization policy
 

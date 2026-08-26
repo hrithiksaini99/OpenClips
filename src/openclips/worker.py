@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-QUEUE_NAMES = ("default",)
+QUEUE_NAMES = ("default", "publish.instagram_reels", "publish.youtube_shorts")
 JobQueue = InMemoryJobQueue | RedisJobQueue
 Handler = Callable[[Session, JobRecord], None]
 
@@ -119,7 +119,7 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
         min_duration_seconds=settings.min_clip_seconds,
         max_duration_seconds=settings.max_clip_seconds,
     )
-    return {
+    handlers = {
         TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage),
         SELECT_CLIPS_JOB_KIND: make_select_clips_handler(HeuristicClipRefiner(), bounds),
         RENDER_CLIP_JOB_KIND: make_render_handler(
@@ -130,6 +130,54 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
             settings.render_height,
         ),
     }
+    handlers.update(
+        make_publish_handlers(
+            instagram_account_id=settings.instagram_account_id,
+            instagram_access_token=settings.instagram_access_token,
+            youtube_access_token=settings.youtube_access_token,
+            storage=storage,
+        )
+    )
+    return handlers
+
+
+def make_publish_handlers(
+    *,
+    instagram_account_id: str,
+    instagram_access_token: str,
+    youtube_access_token: str,
+    storage: MediaStorage,
+) -> dict[str, Handler]:
+    """Register independent publish handlers per platform queue."""
+
+    from openclips.application.publishing import ScheduleCoordinator
+    from openclips.domain.publishing import Platform
+    from openclips.infrastructure.repositories import PublicationRepository
+    from openclips.providers.platforms.base import PlatformPublisher
+    from openclips.providers.platforms.instagram import InstagramReelsPublisher
+    from openclips.providers.platforms.youtube import YouTubeShortsPublisher
+
+    publisher_map: dict[Platform, PlatformPublisher] = {
+        Platform.INSTAGRAM_REELS: InstagramReelsPublisher(
+            account_id=instagram_account_id, access_token=instagram_access_token
+        ),
+        Platform.YOUTUBE_SHORTS: YouTubeShortsPublisher(access_token=youtube_access_token),
+    }
+
+    def _make(platform: Platform) -> Handler:
+        def handle(session: Session, job: JobRecord) -> None:
+            coordinator = ScheduleCoordinator(
+                clips=ClipRepository(session),
+                publications=PublicationRepository(session),
+                jobs=JobRepository(session),
+                publishers={platform: publisher_map[platform]},
+                storage=storage,
+            )
+            coordinator.run(job)
+
+        return handle
+
+    return {platform.job_kind: _make(platform) for platform in Platform}
 
 
 def process_once(

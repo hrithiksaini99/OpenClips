@@ -65,3 +65,14 @@ The warning is the upstream Starlette deprecation warning emitted by the current
 - Live smoke checks against Compose: `/docs`, `/api/v1/clips`, `/api/v1/dashboard` returned 200; unauthenticated approve returned 503 without a configured token.
 - Operational fix: shared integration fixture (`tests/integration/conftest.py`) drops the alembic stamp after tests so `alembic upgrade head` always rebuilds cleanly.
 - Ruff: passed. mypy: no issues in 37 source files.
+
+## Phase 6 — 2026-08-26
+
+- Local suite: 168 passed, 19 skipped (PostgreSQL-gated).
+- Full suite in Compose: 187 passed.
+- Platform adapters: `InstagramReelsPublisher` (two-step container/publish graph calls) and `YouTubeShortsPublisher` (multipart resumable upload) behind a `PlatformPublisher` contract and injectable transport; shell-free argv, strict JSON parsing, verbatim API-error preservation, up-front validation, temp-file cleanup.
+- Scheduling: only APPROVED clips schedule; manual timestamps or deterministic `DailyWindowRule` slots; independent queues and job kinds per platform; worker dispatches due publications via `ScheduleCoordinator.enqueue_due`.
+- Bounded retries: capped exponential backoff (30s doubling to 1h) inside a five-attempt budget; failures preserve state, reason, attempt count, and next attempt time on publication records; exhausted publications refuse further retries.
+- Persistence: `publication_records` table with platform, status machine, attempts, error, external identity, and published timestamp (migration `0007_publication_records`).
+- Model fix during verification: restored the clips-table timestamp columns that a Phase 3 refactor had dropped from the ORM metadata.
+- Ruff: passed. mypy: no issues in 43 source files. Migrations cycled cleanly; `alembic check` clean.

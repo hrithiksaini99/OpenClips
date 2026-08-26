@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -6,11 +6,18 @@ from sqlalchemy.orm import Session
 
 from openclips.domain.clips import ClipEvent, ClipStateMachine, ClipStatus
 from openclips.domain.jobs import JobEvent, JobStateMachine, JobStatus
+from openclips.domain.publishing import (
+    Platform,
+    PublicationEvent,
+    PublicationStateMachine,
+    PublicationStatus,
+)
 from openclips.domain.sources import SourceEvent, SourceKind, SourceStateMachine
 from openclips.domain.transcripts import TranscriptDocument, TranscriptSegment, TranscriptWord
 from openclips.infrastructure.models import (
     ClipRecord,
     JobRecord,
+    PublicationRecord,
     SourceAssetRecord,
     TranscriptRecord,
 )
@@ -300,3 +307,101 @@ class TranscriptRepository:
         if record is None:
             return None
         return _payload_to_document(record.payload)
+
+
+class PublicationRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def create(
+        self,
+        *,
+        clip_id: UUID,
+        platform: Platform,
+        scheduled_at: datetime,
+    ) -> PublicationRecord:
+        record = PublicationRecord(
+            clip_id=clip_id, platform=platform, scheduled_at=scheduled_at
+        )
+        self.session.add(record)
+        self.session.flush()
+        return record
+
+    def get(self, publication_id: UUID) -> PublicationRecord | None:
+        return self.session.get(PublicationRecord, publication_id)
+
+    def list_all(
+        self,
+        *,
+        platform: Platform | None = None,
+        status: PublicationStatus | None = None,
+        limit: int = 100,
+    ) -> list[PublicationRecord]:
+        query = self.session.query(PublicationRecord)
+        if platform is not None:
+            query = query.filter(PublicationRecord.platform == platform)
+        if status is not None:
+            query = query.filter(PublicationRecord.status == status)
+        return (
+            query.order_by(PublicationRecord.scheduled_at.asc(), PublicationRecord.id)
+            .limit(limit)
+            .all()
+        )
+
+    def due(self, now: datetime, *, limit: int = 50) -> list[PublicationRecord]:
+        return (
+            self.session.query(PublicationRecord)
+            .filter(
+                PublicationRecord.status == PublicationStatus.SCHEDULED,
+                PublicationRecord.scheduled_at <= now,
+            )
+            .order_by(PublicationRecord.scheduled_at.asc())
+            .limit(limit)
+            .all()
+        )
+
+    def transition(
+        self,
+        publication_id: UUID,
+        event: PublicationEvent,
+        *,
+        error: str | None = None,
+    ) -> PublicationRecord:
+        record = self.session.get(PublicationRecord, publication_id)
+        if record is None:
+            raise KeyError(publication_id)
+        record.status = PublicationStateMachine.transition(record.status, event)
+        if event is PublicationEvent.START:
+            record.attempts += 1
+        if error is not None:
+            record.error = error
+        self.session.flush()
+        return record
+
+    def attach_result(
+        self,
+        publication_id: UUID,
+        *,
+        external_id: str | None,
+        external_url: str | None,
+    ) -> PublicationRecord:
+        record = self.session.get(PublicationRecord, publication_id)
+        if record is None:
+            raise KeyError(publication_id)
+        record.external_id = external_id
+        record.external_url = external_url
+        record.published_at = datetime.now(UTC)
+        record.status = PublicationStateMachine.transition(
+            record.status, PublicationEvent.SUCCEED
+        )
+        self.session.flush()
+        return record
+
+    def reschedule_after_failure(
+        self, publication_id: UUID, next_attempt_at: datetime
+    ) -> PublicationRecord:
+        """Apply bounded retry semantics: RETRY then push the schedule out."""
+        record = self.transition(publication_id, PublicationEvent.RETRY)
+        record.scheduled_at = next_attempt_at
+        self.session.flush()
+        return record
