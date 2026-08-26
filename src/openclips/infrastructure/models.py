@@ -1,11 +1,12 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, Enum, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from openclips.domain.clips import ClipStatus
 from openclips.domain.jobs import JobStatus
+from openclips.domain.sources import SourceKind, SourceStatus
 
 
 class Base(DeclarativeBase):
@@ -37,6 +38,30 @@ class ClipRecord(Base):
         Enum(ClipStatus, native_enum=False), default=ClipStatus.GENERATING
     )
     output_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SourceAssetRecord(Base):
+    __tablename__ = "source_assets"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    source_kind: Mapped[SourceKind] = mapped_column(
+        Enum(SourceKind, native_enum=False), default=SourceKind.LOCAL_UPLOAD
+    )
+    original_locator: Mapped[str] = mapped_column(String(2048))
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64), unique=True)
+    display_name: Mapped[str] = mapped_column(String(255))
+    media_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    byte_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    status: Mapped[SourceStatus] = mapped_column(
+        Enum(SourceStatus, native_enum=False), default=SourceStatus.PENDING
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retain_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
