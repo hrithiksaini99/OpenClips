@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from openclips.providers.transcription import TranscriptionReadiness
+
 
 class SourceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -96,3 +98,7 @@ class YouTubeIngestBody(BaseModel):
 class SourceIngestOut(BaseModel):
     source: SourceOut
     next_job: EnqueueJobOut | None = None
+
+
+class TranscriptionReadinessOut(BaseModel):
+    status: TranscriptionReadiness

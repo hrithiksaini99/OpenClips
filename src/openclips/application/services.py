@@ -51,6 +51,7 @@ def build_services(settings: Settings) -> AppServices:
             model_size=settings.transcription_model_size,
             device=settings.transcription_device,
             compute_type=settings.transcription_compute_type,
+            model_root=settings.model_cache_root,
         ),
         renderer=FFmpegRenderer(),
         crop_strategy=CenterCropStrategy(),

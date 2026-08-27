@@ -135,6 +135,7 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
         model_size=settings.transcription_model_size,
         device=settings.transcription_device,
         compute_type=settings.transcription_compute_type,
+        model_root=settings.model_cache_root,
     )
     bounds = SelectionBounds(
         max_clips=settings.max_clips,

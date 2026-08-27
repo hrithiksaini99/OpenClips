@@ -18,6 +18,7 @@ from openclips.api.schemas import (
     JobOut,
     SourceIngestOut,
     SourceOut,
+    TranscriptionReadinessOut,
     YouTubeIngestBody,
 )
 from openclips.application.clipping import ClipSelectionCoordinator
@@ -168,6 +169,11 @@ def build_router(
             ) from error
         next_job = EnqueueJobOut(job_id=job.id, kind=job.kind, status=job.status.value)
         return SourceIngestOut(source=SourceOut.model_validate(source), next_job=next_job)
+
+    @router.get("/system/transcription-readiness", response_model=TranscriptionReadinessOut)
+    def transcription_readiness() -> TranscriptionReadinessOut:
+        state = services.transcription_provider.readiness_state()
+        return TranscriptionReadinessOut(status=state)
 
     @router.post(
         "/sources/{source_id}/transcribe",
