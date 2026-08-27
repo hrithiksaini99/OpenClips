@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from openclips.application.dispatch import OutboxRelay
 from openclips.domain.outbox import OutboxStatus
 from openclips.infrastructure.models import OutboxRecord
-from openclips.infrastructure.queue import RedisJobQueue
+from openclips.infrastructure.queue import QueueReceipt, RedisJobQueue
 from openclips.infrastructure.repositories import JobRepository
 
 pytestmark = pytest.mark.integration
@@ -25,6 +25,8 @@ def _redis_client():  # type: ignore[no-untyped-def]
     import redis
 
     client = redis.Redis.from_url(url)
+    if client.connection_pool.connection_kwargs.get("db") != 15:
+        raise pytest.UsageError("REDIS_URL must target the reserved Redis database 15")
     client.flushdb()
     return client
 
@@ -77,3 +79,25 @@ def test_restore_processing_redelivers_unacked_claim() -> None:
     assert queue.processing_depth(QUEUE) == 0
     again = queue.claim(QUEUE, timeout_seconds=1)
     assert again is not None and again.payload == "job-1"
+
+
+def test_restore_processing_preserves_fifo_priority_on_real_redis() -> None:
+    client = _redis_client()
+    queue = RedisJobQueue(client)
+
+    queue.enqueue(QUEUE, "job-1")
+    queue.enqueue(QUEUE, "job-2")
+    queue.claim(QUEUE, timeout_seconds=1)
+    queue.claim(QUEUE, timeout_seconds=1)
+    queue.enqueue(QUEUE, "job-3")
+    queue.restore_processing(QUEUE)
+
+    assert [
+        queue.claim(QUEUE, timeout_seconds=1),
+        queue.claim(QUEUE, timeout_seconds=1),
+        queue.claim(QUEUE, timeout_seconds=1),
+    ] == [
+        QueueReceipt(QUEUE, "job-1"),
+        QueueReceipt(QUEUE, "job-2"),
+        QueueReceipt(QUEUE, "job-3"),
+    ]
