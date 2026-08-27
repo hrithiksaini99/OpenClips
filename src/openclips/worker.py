@@ -3,12 +3,14 @@
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from openclips.application.clipping import SELECT_CLIPS_JOB_KIND, ClipSelectionCoordinator
+from openclips.application.dispatch import OutboxRelay
 from openclips.application.health import make_database_probe
 from openclips.application.rendering import RENDER_CLIP_JOB_KIND, RenderCoordinator
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
@@ -190,10 +192,11 @@ def process_once(
 ) -> bool:
     """Claim and process at most one job; return True when a payload was handled."""
     for queue_name in queue_names:
-        payload = queue.claim(queue_name, timeout_seconds=claim_timeout_seconds)
-        if payload is None:
+        receipt = queue.claim(queue_name, timeout_seconds=claim_timeout_seconds)
+        if receipt is None:
             continue
-        _process_payload(UUID(payload), session_factory, handlers)
+        _process_payload(UUID(receipt.payload), session_factory, handlers)
+        queue.ack(receipt)
         return True
     return False
 
@@ -208,6 +211,12 @@ def _process_payload(
         job = jobs.get(payload)
         if job is None:
             logger.warning("Ignoring unknown job id %s claimed from the queue", payload)
+            session.commit()
+            return
+        if job.status is not JobStatus.QUEUED:
+            logger.info(
+                "Ignoring duplicate queue message for job %s in status %s", payload, job.status
+            )
             session.commit()
             return
         handler = handlers.get(job.kind)
@@ -254,9 +263,20 @@ def run() -> None:
 
     client: Redis = redis.Redis.from_url(settings.redis_url)
     queue = RedisJobQueue(client)
+    relay = OutboxRelay(
+        session_factory=session_factory,
+        queue=queue,
+        clock=lambda: datetime.now(UTC),
+        batch_size=settings.outbox_batch_size,
+        backoff_cap_seconds=settings.outbox_backoff_cap_seconds,
+    )
 
     probe = make_database_probe(engine)
     probe()
+    for queue_name in QUEUE_NAMES:
+        restored = queue.restore_processing(queue_name)
+        if restored:
+            logger.info("Restored %s unacknowledged messages to %s", restored, queue_name)
     logger.info(
         "OpenClips worker started with concurrency=%s queues=%s",
         settings.worker_concurrency,
@@ -264,6 +284,7 @@ def run() -> None:
     )
     try:
         while True:
+            relay.dispatch_once()
             handled = process_once(session_factory=session_factory, handlers=handlers, queue=queue)
             if not handled:
                 time.sleep(0.5)
