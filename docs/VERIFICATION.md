@@ -76,3 +76,53 @@ The warning is the upstream Starlette deprecation warning emitted by the current
 - Persistence: `publication_records` table with platform, status machine, attempts, error, external identity, and published timestamp (migration `0007_publication_records`).
 - Model fix during verification: restored the clips-table timestamp columns that a Phase 3 refactor had dropped from the ORM metadata.
 - Ruff: passed. mypy: no issues in 43 source files. Migrations cycled cleanly; `alembic check` clean.
+
+## Operational core — 2026-08-27
+
+Verified with `scripts/verify.sh`-equivalent commands run in the operational-core
+Docker image against a **disposable** `openclips_test_*` PostgreSQL database and
+**reserved** Redis logical database 15 on the existing Compose infrastructure. No
+developer database, named volume, or long-running `api` service was disturbed;
+the disposable database and Redis db were dropped/flushed afterward.
+
+- Full suite with real PostgreSQL + Redis + FFmpeg: **246 passed, 1 skipped, 1 warning**.
+  - The one skip is `tests/test_deployment.py::test_compose_shares_media_and_model_cache`,
+    which resolves `docker compose config` and therefore skips where the `docker`
+    CLI is unavailable (inside the app container). It passes on the host, where the
+    CLI is present.
+  - The one warning is the pre-existing upstream Starlette/httpx test-client
+    deprecation; it does not fail the suite.
+- Real end-to-end pipeline (`tests/integration/test_operational_pipeline.py`): one
+  authenticated `POST /api/v1/sources/upload` of a 25-second FFmpeg-generated MP4
+  ran durably through the transactional outbox relay onto reliable Redis lists and
+  the worker consumer, chaining transcribe → select → render automatically. The
+  source reached READY, a transcript persisted, and every clip reached
+  READY_FOR_REVIEW at render dimensions 1080×1920 with its rendered artifact present
+  on disk. Only the transcription provider was faked; selection and FFmpeg rendering
+  were real.
+- Real-Redis delivery (`tests/integration/test_redis_dispatch.py`): the outbox relay
+  delivered a due job onto the Redis ready list and marked the event DELIVERED; a
+  claimed-but-unacknowledged message was restored to ready and re-claimed.
+- Migrations: `alembic upgrade head` then `alembic check` reported
+  `No new upgrade operations detected` against the disposable database.
+- Ruff: passed. Strict mypy: no issues in 47 source files.
+- Compose resolution (host, `docker` CLI present): `test_compose_shares_media_and_model_cache`
+  passed — API and worker share the `media-data` volume at `/data/media`, mount
+  `model-cache` at `/root/.cache/huggingface` (read-only for API, read-write for
+  worker), and both receive `OPENCLIPS_MEDIA_ROOT`, database, and Redis environment.
+
+Full `scripts/verify.sh` run (2026-08-27, isolated `operational-core` Compose stack,
+host ports 5432/6379/8000 free): exit 0. It applied migrations (`No new upgrade
+operations detected`), ran the full suite against a disposable database and reserved
+Redis db 15 (246 passed, 1 skipped, 1 warning), passed Ruff and strict mypy, and
+completed the `/health` + `/ready` HTTP smoke check on a one-off container published
+to port 8001 — without disturbing the developer database, named volumes, or a
+running dev `api` service. `scripts/verify.sh` requires those host ports to be free;
+stop any other stack bound to them first.
+
+Fix found by this gate: running the suite via `docker compose run api pytest` loads
+the api service's `env_file: .env` (added with the shared runtime), which injected
+`OPENCLIPS_ADMIN_TOKEN` into the environment and made the fail-closed
+"unconfigured token" test see a configured token (401 instead of 503). The auth
+tests now pass the admin token explicitly so they are independent of the container
+environment.

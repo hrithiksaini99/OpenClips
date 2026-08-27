@@ -15,6 +15,7 @@ class JobEvent(StrEnum):
     SUCCEED = "SUCCEED"
     FAIL = "FAIL"
     RETRY = "RETRY"
+    RECOVER = "RECOVER"
 
 
 class JobStateMachine:
@@ -23,6 +24,7 @@ class JobStateMachine:
         (JobStatus.RUNNING, JobEvent.SUCCEED): JobStatus.SUCCEEDED,
         (JobStatus.RUNNING, JobEvent.FAIL): JobStatus.FAILED,
         (JobStatus.FAILED, JobEvent.RETRY): JobStatus.QUEUED,
+        (JobStatus.RUNNING, JobEvent.RECOVER): JobStatus.QUEUED,
     }
 
     @classmethod

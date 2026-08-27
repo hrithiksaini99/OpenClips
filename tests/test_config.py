@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -10,6 +12,7 @@ def test_settings_have_deterministic_defaults() -> None:
     assert settings.database_url.startswith("postgresql+psycopg://")
     assert settings.redis_url.startswith("redis://")
     assert settings.worker_concurrency >= 1
+    assert settings.model_cache_root == Path("/root/.cache/huggingface/hub")
 
 
 def test_settings_parse_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -24,6 +27,19 @@ def test_settings_parse_from_environment(monkeypatch: pytest.MonkeyPatch) -> Non
     assert settings.redis_url == "redis://cache:6379/0"
     assert settings.worker_concurrency == 4
     assert str(settings.media_root) == "/data/media"
+
+
+def test_operational_limits_are_typed() -> None:
+    settings = Settings(
+        _env_file=None,
+        max_upload_bytes=1024,
+        outbox_batch_size=7,
+        outbox_backoff_cap_seconds=90,
+    )
+
+    assert settings.max_upload_bytes == 1024
+    assert settings.outbox_batch_size == 7
+    assert settings.outbox_backoff_cap_seconds == 90
 
 
 def test_settings_reject_invalid_worker_concurrency(

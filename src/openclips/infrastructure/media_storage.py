@@ -64,6 +64,44 @@ class MediaStorage:
         parts = _validate_key(key)
         return self._root.joinpath(*parts)
 
+    def promote_file(self, key: str, temporary_path: Path) -> StoredMedia:
+        """Move an already-materialized temporary file into the content store.
+
+        The temporary file (for example a completed download) is hashed and
+        sized, then moved into place with ``os.replace`` when it shares the
+        media root's filesystem, or copied and unlinked otherwise. Either way
+        the source path no longer exists once the promotion succeeds.
+        """
+        self._validate_destination(key)
+        target = self.resolve(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        hasher = hashlib.sha256()
+        size = 0
+        with temporary_path.open("rb") as handle:
+            while chunk := handle.read(_CHUNK_SIZE):
+                hasher.update(chunk)
+                size += len(chunk)
+
+        try:
+            os.replace(temporary_path, target)
+        except OSError:
+            self.write_stream(key, read_file_chunks(temporary_path))
+            temporary_path.unlink(missing_ok=True)
+
+        return StoredMedia(key=key, path=target, size_bytes=size, sha256=hasher.hexdigest())
+
+    def _validate_destination(self, key: str) -> None:
+        parts = _validate_key(key)
+        self._root.mkdir(parents=True, exist_ok=True)
+        resolved_root = self._root.resolve()
+        current = self._root
+        for part in parts[:-1]:
+            current = current / part
+            if current.is_symlink() and not current.resolve().is_relative_to(resolved_root):
+                msg = f"Media storage path escapes the media root: {key!r}"
+                raise UnsafeMediaPathError(msg)
+
     def write_stream(self, key: str, chunks: Iterable[bytes]) -> StoredMedia:
         parts = _validate_key(key)
         self._root.mkdir(parents=True, exist_ok=True)

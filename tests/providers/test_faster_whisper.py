@@ -8,7 +8,7 @@ from openclips.providers.faster_whisper_provider import (
     FasterWhisperProvider,
     normalize_raw_segments,
 )
-from openclips.providers.transcription import ModelUnavailableError
+from openclips.providers.transcription import ModelUnavailableError, TranscriptionReadiness
 
 
 class FakeWord:
@@ -134,3 +134,72 @@ def test_model_factory_receives_configuration() -> None:
     provider._ensure_model()
 
     assert received == {"size": "small", "device": "cuda", "compute_type": "float16"}
+
+
+def test_readiness_reports_download_marker(tmp_path: Path) -> None:
+    provider = FasterWhisperProvider(model_root=tmp_path)
+    provider.download_marker.parent.mkdir(parents=True, exist_ok=True)
+    provider.download_marker.touch()
+
+    assert provider.readiness_state() is TranscriptionReadiness.DOWNLOADING
+
+
+def test_readiness_reports_available_when_model_directory_exists(tmp_path: Path) -> None:
+    provider = FasterWhisperProvider(model_size="base", model_root=tmp_path)
+    (tmp_path / "models--Systran--faster-whisper-base").mkdir(parents=True)
+
+    assert provider.readiness_state() is TranscriptionReadiness.AVAILABLE
+
+
+def test_readiness_reports_missing_without_model_or_marker(tmp_path: Path) -> None:
+    provider = FasterWhisperProvider(model_root=tmp_path)
+
+    assert provider.readiness_state() is TranscriptionReadiness.MISSING
+
+
+def test_available_takes_precedence_over_a_stale_marker(tmp_path: Path) -> None:
+    provider = FasterWhisperProvider(model_size="base", model_root=tmp_path)
+    (tmp_path / "models--Systran--faster-whisper-base").mkdir(parents=True)
+    provider.download_marker.parent.mkdir(parents=True, exist_ok=True)
+    provider.download_marker.touch()
+
+    assert provider.readiness_state() is TranscriptionReadiness.AVAILABLE
+
+
+def test_download_marker_is_model_specific(tmp_path: Path) -> None:
+    base = FasterWhisperProvider(model_size="base", model_root=tmp_path)
+    large = FasterWhisperProvider(model_size="large-v3", model_root=tmp_path)
+
+    assert base.download_marker != large.download_marker
+
+
+def test_load_model_creates_marker_during_download_and_clears_it(tmp_path: Path) -> None:
+    # The real download path (no model_factory) wraps WhisperModel loading in the
+    # marker lifecycle; substitute the loader to observe the marker mid-download.
+    provider = FasterWhisperProvider(model_root=tmp_path)
+    observed: dict[str, bool] = {}
+
+    def fake_loader() -> object:
+        observed["marker_present"] = provider.download_marker.exists()
+        return object()
+
+    provider._load_real_model = fake_loader  # type: ignore[method-assign]
+    provider._ensure_model()
+
+    assert observed["marker_present"] is True
+    assert not provider.download_marker.exists()
+
+
+def test_load_model_clears_marker_even_when_download_fails(tmp_path: Path) -> None:
+    provider = FasterWhisperProvider(model_root=tmp_path)
+
+    def failing_loader() -> object:
+        msg = "network down"
+        raise RuntimeError(msg)
+
+    provider._load_real_model = failing_loader  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="network down"):
+        provider._ensure_model()
+
+    assert not provider.download_marker.exists()

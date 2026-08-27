@@ -68,6 +68,7 @@ class IngestionCoordinator:
         display_name: str,
         chunks: Iterable[bytes],
         external_id: str | None = None,
+        auto_process: bool = True,
     ) -> SourceAssetRecord:
         digest, spool = self._spool(chunks)
         try:
@@ -85,6 +86,7 @@ class IngestionCoordinator:
                     idempotency_key=digest,
                     display_name=display_name,
                     retain_until=self._clock() + timedelta(days=SOURCE_RETENTION_DAYS),
+                    auto_process=auto_process,
                 )
             key = _storage_key(record.source_kind, digest, record.display_name)
             try:

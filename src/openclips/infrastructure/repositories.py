@@ -4,8 +4,10 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from openclips.application.pipeline import queue_for_job_kind
 from openclips.domain.clips import ClipEvent, ClipStateMachine, ClipStatus
 from openclips.domain.jobs import JobEvent, JobStateMachine, JobStatus
+from openclips.domain.outbox import OutboxStatus
 from openclips.domain.publishing import (
     Platform,
     PublicationEvent,
@@ -17,6 +19,7 @@ from openclips.domain.transcripts import TranscriptDocument, TranscriptSegment, 
 from openclips.infrastructure.models import (
     ClipRecord,
     JobRecord,
+    OutboxRecord,
     PublicationRecord,
     SourceAssetRecord,
     TranscriptRecord,
@@ -33,8 +36,25 @@ class JobRepository:
         self.session.flush()
         return record
 
+    def create_dispatched(
+        self, kind: str, *, payload: str | None, queue_name: str
+    ) -> tuple[JobRecord, OutboxRecord]:
+        job = self.create(kind, payload=payload)
+        event = OutboxRecord(job_id=job.id, queue_name=queue_name)
+        self.session.add(event)
+        self.session.flush()
+        return job, event
+
     def get(self, job_id: UUID) -> JobRecord | None:
         return self.session.get(JobRecord, job_id)
+
+    def get_for_update(self, job_id: UUID) -> JobRecord | None:
+        return (
+            self.session.query(JobRecord)
+            .filter(JobRecord.id == job_id)
+            .with_for_update()
+            .one_or_none()
+        )
 
     def list_all(
         self,
@@ -59,8 +79,72 @@ class JobRepository:
         record.status = JobStateMachine.transition(record.status, event)
         if event in (JobEvent.START, JobEvent.RETRY):
             record.attempts += 1
+        if event in (JobEvent.RETRY, JobEvent.RECOVER):
+            record.error = None
         if error is not None:
             record.error = error
+        self.session.flush()
+        return record
+
+    def retry_dispatched(self, job_id: UUID) -> tuple[JobRecord, OutboxRecord]:
+        job = self.transition(job_id, JobEvent.RETRY)
+        event = OutboxRecord(job_id=job.id, queue_name=queue_for_job_kind(job.kind))
+        self.session.add(event)
+        self.session.flush()
+        return job, event
+
+    def recover_running(self) -> list[JobRecord]:
+        records = (
+            self.session.query(JobRecord)
+            .filter(JobRecord.status == JobStatus.RUNNING)
+            .order_by(JobRecord.created_at.asc(), JobRecord.id)
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+        for record in records:
+            self.transition(record.id, JobEvent.RECOVER)
+            self.session.add(
+                OutboxRecord(job_id=record.id, queue_name=queue_for_job_kind(record.kind))
+            )
+        self.session.flush()
+        return records
+
+
+class OutboxRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def due(self, now: datetime, limit: int) -> list[OutboxRecord]:
+        return (
+            self.session.query(OutboxRecord)
+            .filter(
+                OutboxRecord.status == OutboxStatus.PENDING,
+                OutboxRecord.available_at <= now,
+            )
+            .order_by(OutboxRecord.available_at.asc(), OutboxRecord.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+            .all()
+        )
+
+    def mark_delivered(self, event_id: UUID, delivered_at: datetime) -> OutboxRecord:
+        record = self.session.get(OutboxRecord, event_id)
+        if record is None:
+            raise KeyError(event_id)
+        record.status = OutboxStatus.DELIVERED
+        record.delivered_at = delivered_at
+        self.session.flush()
+        return record
+
+    def mark_failed(
+        self, event_id: UUID, error: str, next_attempt_at: datetime
+    ) -> OutboxRecord:
+        record = self.session.get(OutboxRecord, event_id)
+        if record is None:
+            raise KeyError(event_id)
+        record.attempts += 1
+        record.last_error = error
+        record.available_at = next_attempt_at
         self.session.flush()
         return record
 
@@ -177,6 +261,7 @@ class SourceRepository:
         idempotency_key: str,
         display_name: str,
         retain_until: datetime,
+        auto_process: bool = True,
     ) -> SourceAssetRecord:
         record = SourceAssetRecord(
             source_kind=source_kind,
@@ -185,6 +270,7 @@ class SourceRepository:
             idempotency_key=idempotency_key,
             display_name=display_name,
             retain_until=retain_until,
+            auto_process=auto_process,
         )
         self.session.add(record)
         self.session.flush()

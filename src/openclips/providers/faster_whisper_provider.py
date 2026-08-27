@@ -10,10 +10,15 @@ from openclips.domain.transcripts import (
     TranscriptSegment,
     TranscriptWord,
 )
-from openclips.providers.transcription import ModelUnavailableError, TranscriptionProvider
+from openclips.providers.transcription import (
+    ModelUnavailableError,
+    TranscriptionProvider,
+    TranscriptionReadiness,
+)
 
 _DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "huggingface" / "hub"
 _MODEL_REPO_TEMPLATE = "models--Systran--faster-whisper-{model_size}"
+_DOWNLOAD_MARKER_TEMPLATE = ".openclips-downloading-{model_size}"
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -64,10 +69,23 @@ class FasterWhisperProvider(TranscriptionProvider):
         self._model: Any | None = None
         self._lock = threading.Lock()
 
+    @property
+    def download_marker(self) -> Path:
+        """Model-specific marker file signalling an in-progress first download."""
+        return self._cache_root() / _DOWNLOAD_MARKER_TEMPLATE.format(model_size=self._model_size)
+
     def is_ready(self) -> bool:
         if self._model is not None:
             return True
         return self._expected_model_path().exists()
+
+    def readiness_state(self) -> TranscriptionReadiness:
+        """Report availability from disk: model present, downloading, or missing."""
+        if self.is_ready():
+            return TranscriptionReadiness.AVAILABLE
+        if self.download_marker.exists():
+            return TranscriptionReadiness.DOWNLOADING
+        return TranscriptionReadiness.MISSING
 
     def readiness(self) -> str:
         if self.is_ready():
@@ -92,10 +110,12 @@ class FasterWhisperProvider(TranscriptionProvider):
             language=str(info.language), duration=float(info.duration), segments=segments
         )
 
+    def _cache_root(self) -> Path:
+        return self._model_root if self._model_root is not None else _DEFAULT_CACHE_ROOT
+
     def _expected_model_path(self) -> Path:
         repo = _MODEL_REPO_TEMPLATE.format(model_size=self._model_size)
-        root = self._model_root if self._model_root is not None else _DEFAULT_CACHE_ROOT
-        return root / repo
+        return self._cache_root() / repo
 
     def _ensure_model(self) -> Any:
         with self._lock:
@@ -106,6 +126,16 @@ class FasterWhisperProvider(TranscriptionProvider):
     def _load_model(self) -> Any:
         if self._model_factory is not None:
             return self._model_factory(self._model_size, self._device, self._compute_type)
+        marker = self.download_marker
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=True)
+        try:
+            return self._load_real_model()
+        finally:
+            marker.unlink(missing_ok=True)
+
+    def _load_real_model(self) -> Any:
+        """Load the real WhisperModel, downloading it on first use if necessary."""
         from faster_whisper import WhisperModel
 
         return WhisperModel(self._model_size, device=self._device, compute_type=self._compute_type)

@@ -3,15 +3,21 @@
 import logging
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from openclips.application.clipping import SELECT_CLIPS_JOB_KIND, ClipSelectionCoordinator
+from openclips.application.dispatch import OutboxRelay
 from openclips.application.health import make_database_probe
 from openclips.application.rendering import RENDER_CLIP_JOB_KIND, RenderCoordinator
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
+from openclips.application.youtube_ingestion import (
+    INGEST_YOUTUBE_JOB_KIND,
+    YouTubeIngestionCoordinator,
+)
 from openclips.config import Settings
 from openclips.domain.captions import CaptionStyle, get_template
 from openclips.domain.jobs import JobEvent, JobStatus
@@ -29,6 +35,7 @@ from openclips.infrastructure.repositories import (
 from openclips.providers.faster_whisper_provider import FasterWhisperProvider
 from openclips.providers.llm import ClipRefiner, HeuristicClipRefiner
 from openclips.providers.renderer import FFmpegRenderer
+from openclips.providers.youtube import YtDlpDownloader
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -107,12 +114,28 @@ def make_render_handler(
     return handle
 
 
+def make_youtube_ingest_handler(downloader: YtDlpDownloader, storage: MediaStorage) -> Handler:
+    """Build a handler that downloads and promotes YouTube sources in the worker."""
+
+    def handle(session: Session, job: JobRecord) -> None:
+        coordinator = YouTubeIngestionCoordinator(
+            sources=SourceRepository(session),
+            jobs=JobRepository(session),
+            storage=storage,
+            downloader=downloader,
+        )
+        coordinator.run(job)
+
+    return handle
+
+
 def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handler]:
     """Register one handler per supported job kind."""
     provider = FasterWhisperProvider(
         model_size=settings.transcription_model_size,
         device=settings.transcription_device,
         compute_type=settings.transcription_compute_type,
+        model_root=settings.model_cache_root,
     )
     bounds = SelectionBounds(
         max_clips=settings.max_clips,
@@ -120,6 +143,7 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
         max_duration_seconds=settings.max_clip_seconds,
     )
     handlers = {
+        INGEST_YOUTUBE_JOB_KIND: make_youtube_ingest_handler(YtDlpDownloader(), storage),
         TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage),
         SELECT_CLIPS_JOB_KIND: make_select_clips_handler(HeuristicClipRefiner(), bounds),
         RENDER_CLIP_JOB_KIND: make_render_handler(
@@ -180,6 +204,25 @@ def make_publish_handlers(
     return {platform.job_kind: _make(platform) for platform in Platform}
 
 
+def recover_startup_state(
+    *,
+    session_factory: sessionmaker[Session],
+    queue: JobQueue,
+    queue_names: tuple[str, ...] = QUEUE_NAMES,
+) -> int:
+    """Restore unacknowledged receipts, then redispatch jobs left running after a crash."""
+    for queue_name in queue_names:
+        restored = queue.restore_processing(queue_name)
+        if restored:
+            logger.info("Restored %s unacknowledged messages to %s", restored, queue_name)
+    with session_factory() as session:
+        recovered = JobRepository(session).recover_running()
+        session.commit()
+    if recovered:
+        logger.info("Recovered %s running jobs for durable redis dispatch", len(recovered))
+    return len(recovered)
+
+
 def process_once(
     *,
     session_factory: sessionmaker[Session],
@@ -190,10 +233,11 @@ def process_once(
 ) -> bool:
     """Claim and process at most one job; return True when a payload was handled."""
     for queue_name in queue_names:
-        payload = queue.claim(queue_name, timeout_seconds=claim_timeout_seconds)
-        if payload is None:
+        receipt = queue.claim(queue_name, timeout_seconds=claim_timeout_seconds)
+        if receipt is None:
             continue
-        _process_payload(UUID(payload), session_factory, handlers)
+        _process_payload(UUID(receipt.payload), session_factory, handlers)
+        queue.ack(receipt)
         return True
     return False
 
@@ -205,9 +249,15 @@ def _process_payload(
 ) -> None:
     with session_factory() as session:
         jobs = JobRepository(session)
-        job = jobs.get(payload)
+        job = jobs.get_for_update(payload)
         if job is None:
             logger.warning("Ignoring unknown job id %s claimed from the queue", payload)
+            session.commit()
+            return
+        if job.status is not JobStatus.QUEUED:
+            logger.info(
+                "Ignoring duplicate queue message for job %s in status %s", payload, job.status
+            )
             session.commit()
             return
         handler = handlers.get(job.kind)
@@ -254,9 +304,17 @@ def run() -> None:
 
     client: Redis = redis.Redis.from_url(settings.redis_url)
     queue = RedisJobQueue(client)
+    relay = OutboxRelay(
+        session_factory=session_factory,
+        queue=queue,
+        clock=lambda: datetime.now(UTC),
+        batch_size=settings.outbox_batch_size,
+        backoff_cap_seconds=settings.outbox_backoff_cap_seconds,
+    )
 
     probe = make_database_probe(engine)
     probe()
+    recover_startup_state(session_factory=session_factory, queue=queue)
     logger.info(
         "OpenClips worker started with concurrency=%s queues=%s",
         settings.worker_concurrency,
@@ -264,6 +322,7 @@ def run() -> None:
     )
     try:
         while True:
+            relay.dispatch_once()
             handled = process_once(session_factory=session_factory, handlers=handlers, queue=queue)
             if not handled:
                 time.sleep(0.5)

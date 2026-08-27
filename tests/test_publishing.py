@@ -24,7 +24,7 @@ from openclips.domain.publishing import (
 )
 from openclips.domain.sources import SourceEvent, SourceKind
 from openclips.infrastructure.media_storage import MediaStorage
-from openclips.infrastructure.models import Base
+from openclips.infrastructure.models import Base, OutboxRecord
 from openclips.infrastructure.queue import InMemoryJobQueue
 from openclips.infrastructure.repositories import (
     ClipRepository,
@@ -212,6 +212,8 @@ def test_enqueue_due_dispatches_platform_queue_jobs(harness: _Harness) -> None:
 
     assert [job.kind for job in created] == ["publish.youtube_shorts"]
     assert [job.payload for job in created] == [str(due_record.id)]
+    event = harness.session.query(OutboxRecord).filter_by(job_id=created[0].id).one()
+    assert event.queue_name == "publish.youtube_shorts"
 
 
 def test_worker_publishes_through_platform_queue(harness: _Harness) -> None:
