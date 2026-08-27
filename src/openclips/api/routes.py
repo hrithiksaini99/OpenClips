@@ -148,6 +148,21 @@ def build_router(
             raise _not_found("Job", job_id)
         return JobOut.model_validate(record)
 
+    @router.post(
+        "/jobs/{job_id}/retry",
+        response_model=JobOut,
+        dependencies=[Depends(require_admin)],
+    )
+    def retry_job(job_id: UUID, session: Session = Depends(get_session)) -> JobOut:
+        _, jobs, _ = _repos(session)
+        try:
+            job, _event = jobs.retry_dispatched(job_id)
+        except KeyError as error:
+            raise _not_found("Job", job_id) from error
+        except InvalidTransitionError as error:
+            raise _conflict(error) from error
+        return JobOut.model_validate(job)
+
     @router.get("/clips", response_model=list[ClipOut])
     def review_queue(
         review_status: str | None = None,

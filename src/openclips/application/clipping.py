@@ -3,6 +3,7 @@
 import logging
 from uuid import UUID
 
+from openclips.application.pipeline import queue_for_job_kind
 from openclips.application.selection import build_candidates
 from openclips.domain.clips import ClipEvent
 from openclips.domain.selection import SelectionBounds
@@ -56,7 +57,12 @@ class ClipSelectionCoordinator:
         if self.transcripts.get_document(source_id) is None:
             msg = f"Source {source_id} has no transcript to select from"
             raise TranscriptMissingError(msg)
-        return self.jobs.create(SELECT_CLIPS_JOB_KIND, payload=str(source_id))
+        job, _event = self.jobs.create_dispatched(
+            SELECT_CLIPS_JOB_KIND,
+            payload=str(source_id),
+            queue_name=queue_for_job_kind(SELECT_CLIPS_JOB_KIND),
+        )
+        return job
 
     def run(self, job: JobRecord) -> list[ClipRecord]:
         """Execute one claimed selection job body without touching state."""

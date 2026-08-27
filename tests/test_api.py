@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,9 +13,10 @@ from sqlalchemy.pool import StaticPool
 
 from openclips.config import Settings
 from openclips.domain.clips import ClipEvent, ClipStatus
+from openclips.domain.jobs import JobEvent
 from openclips.domain.sources import SourceEvent, SourceKind
-from openclips.infrastructure.models import Base
-from openclips.infrastructure.repositories import ClipRepository, SourceRepository
+from openclips.infrastructure.models import Base, OutboxRecord
+from openclips.infrastructure.repositories import ClipRepository, JobRepository, SourceRepository
 from openclips.main import create_app
 
 TOKEN = "test-admin-token"
@@ -248,6 +250,44 @@ def test_transcribe_enqueue_validates_source_state(client) -> None:
     assert missing.status_code == 404
     assert conflict.status_code == 409
     assert "not ready" in conflict.json()["detail"]
+
+
+def test_manual_transcribe_creates_pending_outbox(client) -> None:
+    test_client, factory = client
+    ids = _seed(factory)
+
+    response = test_client.post(
+        f"/api/v1/sources/{ids['source_id']}/transcribe",
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    with factory() as session:
+        event = (
+            session.query(OutboxRecord)
+            .filter_by(job_id=UUID(response.json()["job_id"]))
+            .one()
+        )
+        assert event.queue_name == "default"
+
+
+def test_retry_failed_job_creates_new_dispatch(client) -> None:
+    test_client, factory = client
+    with factory() as session:
+        jobs = JobRepository(session)
+        failed = jobs.create("transcribe", payload=str(uuid4()))
+        jobs.transition(failed.id, JobEvent.START)
+        jobs.transition(failed.id, JobEvent.FAIL, error="forced test failure")
+        failed_id = failed.id
+        session.commit()
+
+    response = test_client.post(f"/api/v1/jobs/{failed_id}/retry", headers=_auth())
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "QUEUED"
+    with factory() as session:
+        event = session.query(OutboxRecord).filter_by(job_id=failed_id).one()
+        assert event.queue_name == "default"
 
 
 def test_render_enqueue_requires_reviewable_clip(client) -> None:

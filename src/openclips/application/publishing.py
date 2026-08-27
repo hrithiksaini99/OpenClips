@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
 
+from openclips.application.pipeline import queue_for_job_kind
 from openclips.domain.clips import ClipEvent, ClipStatus
 from openclips.domain.jobs import JobEvent, JobStatus  # noqa: F401
 from openclips.domain.publishing import (
@@ -182,7 +183,12 @@ class ScheduleCoordinator:
         """Create jobs for every due publication on its platform queue."""
         jobs: list[JobRecord] = []
         for record in self.publications.due(self._clock()):
-            jobs.append(self.jobs.create(record.platform.job_kind, payload=str(record.id)))
+            job, _event = self.jobs.create_dispatched(
+                record.platform.job_kind,
+                payload=str(record.id),
+                queue_name=queue_for_job_kind(record.platform.job_kind),
+            )
+            jobs.append(job)
         return jobs
 
     def _get(self, publication_id: UUID) -> PublicationRecord:

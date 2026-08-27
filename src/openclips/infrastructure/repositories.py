@@ -4,6 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from openclips.application.pipeline import queue_for_job_kind
 from openclips.domain.clips import ClipEvent, ClipStateMachine, ClipStatus
 from openclips.domain.jobs import JobEvent, JobStateMachine, JobStatus
 from openclips.domain.outbox import OutboxStatus
@@ -47,6 +48,14 @@ class JobRepository:
     def get(self, job_id: UUID) -> JobRecord | None:
         return self.session.get(JobRecord, job_id)
 
+    def get_for_update(self, job_id: UUID) -> JobRecord | None:
+        return (
+            self.session.query(JobRecord)
+            .filter(JobRecord.id == job_id)
+            .with_for_update()
+            .one_or_none()
+        )
+
     def list_all(
         self,
         *,
@@ -70,10 +79,35 @@ class JobRepository:
         record.status = JobStateMachine.transition(record.status, event)
         if event in (JobEvent.START, JobEvent.RETRY):
             record.attempts += 1
+        if event in (JobEvent.RETRY, JobEvent.RECOVER):
+            record.error = None
         if error is not None:
             record.error = error
         self.session.flush()
         return record
+
+    def retry_dispatched(self, job_id: UUID) -> tuple[JobRecord, OutboxRecord]:
+        job = self.transition(job_id, JobEvent.RETRY)
+        event = OutboxRecord(job_id=job.id, queue_name=queue_for_job_kind(job.kind))
+        self.session.add(event)
+        self.session.flush()
+        return job, event
+
+    def recover_running(self) -> list[JobRecord]:
+        records = (
+            self.session.query(JobRecord)
+            .filter(JobRecord.status == JobStatus.RUNNING)
+            .order_by(JobRecord.created_at.asc(), JobRecord.id)
+            .with_for_update(skip_locked=True)
+            .all()
+        )
+        for record in records:
+            self.transition(record.id, JobEvent.RECOVER)
+            self.session.add(
+                OutboxRecord(job_id=record.id, queue_name=queue_for_job_kind(record.kind))
+            )
+        self.session.flush()
+        return records
 
 
 class OutboxRepository:

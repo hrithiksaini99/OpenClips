@@ -182,6 +182,25 @@ def make_publish_handlers(
     return {platform.job_kind: _make(platform) for platform in Platform}
 
 
+def recover_startup_state(
+    *,
+    session_factory: sessionmaker[Session],
+    queue: JobQueue,
+    queue_names: tuple[str, ...] = QUEUE_NAMES,
+) -> int:
+    """Restore unacknowledged receipts, then redispatch jobs left running after a crash."""
+    for queue_name in queue_names:
+        restored = queue.restore_processing(queue_name)
+        if restored:
+            logger.info("Restored %s unacknowledged messages to %s", restored, queue_name)
+    with session_factory() as session:
+        recovered = JobRepository(session).recover_running()
+        session.commit()
+    if recovered:
+        logger.info("Recovered %s running jobs for durable redis dispatch", len(recovered))
+    return len(recovered)
+
+
 def process_once(
     *,
     session_factory: sessionmaker[Session],
@@ -208,7 +227,7 @@ def _process_payload(
 ) -> None:
     with session_factory() as session:
         jobs = JobRepository(session)
-        job = jobs.get(payload)
+        job = jobs.get_for_update(payload)
         if job is None:
             logger.warning("Ignoring unknown job id %s claimed from the queue", payload)
             session.commit()
@@ -273,10 +292,7 @@ def run() -> None:
 
     probe = make_database_probe(engine)
     probe()
-    for queue_name in QUEUE_NAMES:
-        restored = queue.restore_processing(queue_name)
-        if restored:
-            logger.info("Restored %s unacknowledged messages to %s", restored, queue_name)
+    recover_startup_state(session_factory=session_factory, queue=queue)
     logger.info(
         "OpenClips worker started with concurrency=%s queues=%s",
         settings.worker_concurrency,

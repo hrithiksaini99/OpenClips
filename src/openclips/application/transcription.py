@@ -2,7 +2,8 @@
 
 from uuid import UUID
 
-from openclips.domain.jobs import JobEvent, JobStatus
+from openclips.application.pipeline import queue_for_job_kind
+from openclips.domain.jobs import JobStatus
 from openclips.domain.sources import SourceStatus
 from openclips.domain.transcripts import TranscriptDocument
 from openclips.infrastructure.media_storage import MediaStorage
@@ -47,7 +48,12 @@ class TranscriptionCoordinator:
     def enqueue(self, source_id: UUID) -> JobRecord:
         """Create a queued transcription job for a ready source."""
         self._transcribable_source(source_id)
-        return self.jobs.create(TRANSCRIBE_JOB_KIND, payload=str(source_id))
+        job, _event = self.jobs.create_dispatched(
+            TRANSCRIBE_JOB_KIND,
+            payload=str(source_id),
+            queue_name=queue_for_job_kind(TRANSCRIBE_JOB_KIND),
+        )
+        return job
 
     def run(self, job: JobRecord) -> TranscriptRecord:
         """Execute one claimed transcription job body without touching state."""
@@ -65,7 +71,8 @@ class TranscriptionCoordinator:
         if job.status is not JobStatus.FAILED:
             msg = f"Only failed jobs can be retried; job {job_id} is {job.status}"
             raise ValueError(msg)
-        return self.jobs.transition(job.id, JobEvent.RETRY)
+        retried, _event = self.jobs.retry_dispatched(job.id)
+        return retried
 
     def _transcribable_source(self, source_id: UUID) -> SourceAssetRecord:
         source = self.sources.get(source_id)

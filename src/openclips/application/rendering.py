@@ -4,9 +4,10 @@ import logging
 from pathlib import Path
 from uuid import UUID
 
+from openclips.application.pipeline import queue_for_job_kind
 from openclips.domain.captions import CaptionStyle
 from openclips.domain.clips import ClipStatus
-from openclips.domain.jobs import JobEvent, JobStatus
+from openclips.domain.jobs import JobStatus
 from openclips.domain.transcripts import TranscriptDocument
 from openclips.infrastructure.media_storage import MediaStorage
 from openclips.infrastructure.models import ClipRecord, JobRecord
@@ -82,7 +83,12 @@ class RenderCoordinator:
     def enqueue(self, clip_id: UUID) -> JobRecord:
         """Create a queued render job for a reviewable clip."""
         self._renderable_clip(clip_id)
-        return self.jobs.create(RENDER_CLIP_JOB_KIND, payload=str(clip_id))
+        job, _event = self.jobs.create_dispatched(
+            RENDER_CLIP_JOB_KIND,
+            payload=str(clip_id),
+            queue_name=queue_for_job_kind(RENDER_CLIP_JOB_KIND),
+        )
+        return job
 
     def run(self, job: JobRecord) -> ClipRecord:
         """Execute one claimed render job body without touching state."""
@@ -97,7 +103,8 @@ class RenderCoordinator:
         if job is None:
             raise KeyError(job_id)
         if job.status is JobStatus.FAILED:
-            return self.jobs.transition(job.id, JobEvent.RETRY)
+            retried, _event = self.jobs.retry_dispatched(job.id)
+            return retried
         msg = f"Only failed jobs can be retried; job {job_id} is {job.status}"
         raise ValueError(msg)
 
