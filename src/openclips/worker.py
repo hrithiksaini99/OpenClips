@@ -14,6 +14,10 @@ from openclips.application.dispatch import OutboxRelay
 from openclips.application.health import make_database_probe
 from openclips.application.rendering import RENDER_CLIP_JOB_KIND, RenderCoordinator
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
+from openclips.application.youtube_ingestion import (
+    INGEST_YOUTUBE_JOB_KIND,
+    YouTubeIngestionCoordinator,
+)
 from openclips.config import Settings
 from openclips.domain.captions import CaptionStyle, get_template
 from openclips.domain.jobs import JobEvent, JobStatus
@@ -31,6 +35,7 @@ from openclips.infrastructure.repositories import (
 from openclips.providers.faster_whisper_provider import FasterWhisperProvider
 from openclips.providers.llm import ClipRefiner, HeuristicClipRefiner
 from openclips.providers.renderer import FFmpegRenderer
+from openclips.providers.youtube import YtDlpDownloader
 
 if TYPE_CHECKING:
     from redis import Redis
@@ -109,6 +114,21 @@ def make_render_handler(
     return handle
 
 
+def make_youtube_ingest_handler(downloader: YtDlpDownloader, storage: MediaStorage) -> Handler:
+    """Build a handler that downloads and promotes YouTube sources in the worker."""
+
+    def handle(session: Session, job: JobRecord) -> None:
+        coordinator = YouTubeIngestionCoordinator(
+            sources=SourceRepository(session),
+            jobs=JobRepository(session),
+            storage=storage,
+            downloader=downloader,
+        )
+        coordinator.run(job)
+
+    return handle
+
+
 def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handler]:
     """Register one handler per supported job kind."""
     provider = FasterWhisperProvider(
@@ -122,6 +142,7 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
         max_duration_seconds=settings.max_clip_seconds,
     )
     handlers = {
+        INGEST_YOUTUBE_JOB_KIND: make_youtube_ingest_handler(YtDlpDownloader(), storage),
         TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage),
         SELECT_CLIPS_JOB_KIND: make_select_clips_handler(HeuristicClipRefiner(), bounds),
         RENDER_CLIP_JOB_KIND: make_render_handler(

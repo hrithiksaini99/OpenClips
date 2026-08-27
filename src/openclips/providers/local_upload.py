@@ -26,7 +26,9 @@ class LocalUploadIngestor:
     def __init__(self, coordinator: IngestionCoordinator) -> None:
         self._coordinator = coordinator
 
-    def ingest(self, filename: str, chunks: Iterable[bytes]) -> SourceAssetRecord:
+    def ingest(
+        self, filename: str, chunks: Iterable[bytes], *, auto_process: bool = True
+    ) -> SourceAssetRecord:
         """Validate the upload extension and register its stream for ingestion."""
         display_name = _display_name(filename)
         suffix = PurePosixPath(display_name).suffix.lower()
@@ -39,4 +41,5 @@ class LocalUploadIngestor:
             original_locator=filename,
             display_name=display_name,
             chunks=chunks,
+            auto_process=auto_process,
         )

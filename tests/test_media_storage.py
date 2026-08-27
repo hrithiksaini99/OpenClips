@@ -102,3 +102,27 @@ def test_successful_write_leaves_no_temp_files_behind(storage: MediaStorage) -> 
     stored = storage.write_stream("local/nested/clean.mp4", [CONTENT])
 
     assert list((storage.root / "local" / "nested").iterdir()) == [stored.path]
+
+
+def test_promote_file_moves_temporary_into_content_store(
+    storage: MediaStorage, media_root: Path, tmp_path: Path
+) -> None:
+    temporary = tmp_path / "download.partial"
+    temporary.write_bytes(CONTENT)
+
+    stored = storage.promote_file("youtube_video/ab/cd123.mp4", temporary)
+
+    assert stored.key == "youtube_video/ab/cd123.mp4"
+    assert stored.path == media_root / "youtube_video" / "ab" / "cd123.mp4"
+    assert stored.size_bytes == len(CONTENT)
+    assert stored.sha256 == hashlib.sha256(CONTENT).hexdigest()
+    assert stored.path.read_bytes() == CONTENT
+    assert not temporary.exists()
+
+
+def test_promote_file_rejects_unsafe_key(storage: MediaStorage, tmp_path: Path) -> None:
+    temporary = tmp_path / "download.partial"
+    temporary.write_bytes(CONTENT)
+
+    with pytest.raises(UnsafeMediaPathError):
+        storage.promote_file("../escape.mp4", temporary)

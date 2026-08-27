@@ -86,3 +86,13 @@ class EnqueueJobOut(BaseModel):
     job_id: UUID
     kind: str
     status: str
+
+
+class YouTubeIngestBody(BaseModel):
+    url: str
+    auto_process: bool = True
+
+
+class SourceIngestOut(BaseModel):
+    source: SourceOut
+    next_job: EnqueueJobOut | None = None

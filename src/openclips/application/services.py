@@ -14,6 +14,7 @@ from openclips.providers.renderer import (
     FFmpegRenderer,
 )
 from openclips.providers.transcription import TranscriptionProvider
+from openclips.providers.youtube import YtDlpDownloader
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,8 @@ class AppServices:
     transcription_provider: TranscriptionProvider
     renderer: FFmpegRenderer
     crop_strategy: CenterCropStrategy
+    downloader: YtDlpDownloader
+    max_upload_bytes: int
     width: int = RENDER_WIDTH
     height: int = RENDER_HEIGHT
 
@@ -51,6 +54,8 @@ def build_services(settings: Settings) -> AppServices:
         ),
         renderer=FFmpegRenderer(),
         crop_strategy=CenterCropStrategy(),
+        downloader=YtDlpDownloader(),
+        max_upload_bytes=settings.max_upload_bytes,
         width=settings.render_width,
         height=settings.render_height,
     )

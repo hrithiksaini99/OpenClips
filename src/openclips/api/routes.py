@@ -1,9 +1,9 @@
 """Review API routes: catalog reads, lifecycle mutations, and job dispatch."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import HTMLResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -16,12 +16,16 @@ from openclips.api.schemas import (
     ClipOut,
     EnqueueJobOut,
     JobOut,
+    SourceIngestOut,
     SourceOut,
+    YouTubeIngestBody,
 )
 from openclips.application.clipping import ClipSelectionCoordinator
+from openclips.application.ingestion import IngestionCoordinator
 from openclips.application.rendering import RenderCoordinator
 from openclips.application.services import AppServices
 from openclips.application.transcription import TranscriptionCoordinator
+from openclips.application.youtube_ingestion import YouTubeIngestionCoordinator
 from openclips.domain.clips import ClipEvent, ClipStatus
 from openclips.domain.errors import InvalidTransitionError
 from openclips.domain.jobs import JobStatus
@@ -31,8 +35,33 @@ from openclips.infrastructure.repositories import (
     SourceRepository,
     TranscriptRepository,
 )
+from openclips.providers.local_upload import LocalUploadIngestor, UnsupportedUploadError
+from openclips.providers.youtube import UnsupportedMediaLocator
 
 SessionFactory = Callable[[], Session]
+
+_UPLOAD_CHUNK_SIZE = 65536
+
+
+class UploadTooLargeError(ValueError):
+    """Raised when a streamed upload exceeds the configured byte budget."""
+
+
+def _too_large(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=detail
+    )
+
+
+def _bounded_upload_chunks(upload: UploadFile, max_bytes: int) -> Iterator[bytes]:
+    """Yield the upload in fixed chunks, refusing to cross the byte budget."""
+    total = 0
+    while chunk := upload.file.read(_UPLOAD_CHUNK_SIZE):
+        total += len(chunk)
+        if total > max_bytes:
+            msg = f"Upload exceeds the maximum of {max_bytes} bytes"
+            raise UploadTooLargeError(msg)
+        yield chunk
 
 
 def _not_found(entity: str, entity_id: UUID) -> HTTPException:
@@ -74,6 +103,71 @@ def build_router(
         if record is None:
             raise _not_found("Source", source_id)
         return SourceOut.model_validate(record)
+
+    def _enqueue_transcription(
+        session: Session, source_id: UUID
+    ) -> EnqueueJobOut:
+        sources, jobs, _ = _repos(session)
+        coordinator = TranscriptionCoordinator(
+            sources=sources,
+            transcripts=TranscriptRepository(session),
+            jobs=jobs,
+            provider=services.transcription_provider,
+            storage=services.storage,
+        )
+        job = coordinator.enqueue(source_id)
+        return EnqueueJobOut(job_id=job.id, kind=job.kind, status=job.status.value)
+
+    @router.post(
+        "/sources/upload",
+        response_model=SourceIngestOut,
+        status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(require_admin)],
+    )
+    def upload_source(
+        file: UploadFile = File(...),
+        auto_process: bool = Form(default=True),
+        session: Session = Depends(get_session),
+    ) -> SourceIngestOut:
+        ingestor = LocalUploadIngestor(
+            IngestionCoordinator(SourceRepository(session), services.storage)
+        )
+        try:
+            source = ingestor.ingest(
+                file.filename or "upload.mp4",
+                _bounded_upload_chunks(file, services.max_upload_bytes),
+                auto_process=auto_process,
+            )
+        except UploadTooLargeError as error:
+            raise _too_large(str(error)) from error
+        except UnsupportedUploadError as error:
+            raise _conflict(error) from error
+        next_job = _enqueue_transcription(session, source.id) if source.auto_process else None
+        return SourceIngestOut(source=SourceOut.model_validate(source), next_job=next_job)
+
+    @router.post(
+        "/sources/youtube",
+        response_model=SourceIngestOut,
+        status_code=status.HTTP_202_ACCEPTED,
+        dependencies=[Depends(require_admin)],
+    )
+    def register_youtube_source(
+        body: YouTubeIngestBody, session: Session = Depends(get_session)
+    ) -> SourceIngestOut:
+        coordinator = YouTubeIngestionCoordinator(
+            sources=SourceRepository(session),
+            jobs=JobRepository(session),
+            storage=services.storage,
+            downloader=services.downloader,
+        )
+        try:
+            source, job = coordinator.register(body.url, auto_process=body.auto_process)
+        except UnsupportedMediaLocator as error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(error)
+            ) from error
+        next_job = EnqueueJobOut(job_id=job.id, kind=job.kind, status=job.status.value)
+        return SourceIngestOut(source=SourceOut.model_validate(source), next_job=next_job)
 
     @router.post(
         "/sources/{source_id}/transcribe",

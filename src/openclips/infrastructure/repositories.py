@@ -261,6 +261,7 @@ class SourceRepository:
         idempotency_key: str,
         display_name: str,
         retain_until: datetime,
+        auto_process: bool = True,
     ) -> SourceAssetRecord:
         record = SourceAssetRecord(
             source_kind=source_kind,
@@ -269,6 +270,7 @@ class SourceRepository:
             idempotency_key=idempotency_key,
             display_name=display_name,
             retain_until=retain_until,
+            auto_process=auto_process,
         )
         self.session.add(record)
         self.session.flush()
