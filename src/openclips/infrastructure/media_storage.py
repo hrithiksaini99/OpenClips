@@ -72,9 +72,7 @@ class MediaStorage:
         media root's filesystem, or copied and unlinked otherwise. Either way
         the source path no longer exists once the promotion succeeds.
         """
-        self._validate_destination(key)
-        target = self.resolve(key)
-        target.parent.mkdir(parents=True, exist_ok=True)
+        target = self._prepare_target(key)
 
         hasher = hashlib.sha256()
         size = 0
@@ -91,9 +89,9 @@ class MediaStorage:
 
         return StoredMedia(key=key, path=target, size_bytes=size, sha256=hasher.hexdigest())
 
-    def _validate_destination(self, key: str) -> None:
+    def _prepare_target(self, key: str) -> Path:
         parts = _validate_key(key)
-        self._root.mkdir(parents=True, exist_ok=True)
+        self._root.mkdir(exist_ok=True)
         resolved_root = self._root.resolve()
         current = self._root
         for part in parts[:-1]:
@@ -101,21 +99,28 @@ class MediaStorage:
             if current.is_symlink() and not current.resolve().is_relative_to(resolved_root):
                 msg = f"Media storage path escapes the media root: {key!r}"
                 raise UnsafeMediaPathError(msg)
+            current.mkdir(exist_ok=True)
+            if current.is_symlink() and not current.resolve().is_relative_to(resolved_root):
+                msg = f"Media storage path escapes the media root: {key!r}"
+                raise UnsafeMediaPathError(msg)
+
+        target = current / parts[-1]
+        if target.is_symlink() and not target.resolve().is_relative_to(resolved_root):
+            msg = f"Media storage path escapes the media root: {key!r}"
+            raise UnsafeMediaPathError(msg)
+        return target
+
+    def delete(self, key: str) -> bool:
+        """Remove a contained media file, returning whether it existed."""
+        target = self._prepare_target(key)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def write_stream(self, key: str, chunks: Iterable[bytes]) -> StoredMedia:
-        parts = _validate_key(key)
-        self._root.mkdir(parents=True, exist_ok=True)
-        resolved_root = self._root.resolve()
-
-        target = self._root.joinpath(*parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
-
-        current = self._root
-        for part in parts[:-1]:
-            current = current / part
-            if current.is_symlink() and not current.resolve().is_relative_to(resolved_root):
-                msg = f"Media storage path escapes the media root: {key!r}"
-                raise UnsafeMediaPathError(msg)
+        target = self._prepare_target(key)
 
         descriptor, temp_name = tempfile.mkstemp(
             dir=target.parent, prefix=f".{target.name}.", suffix=".partial"

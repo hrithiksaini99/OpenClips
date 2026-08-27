@@ -25,6 +25,13 @@ def failing_chunks() -> Iterator[bytes]:
     raise RuntimeError(msg)
 
 
+def snapshot_tree(root: Path) -> dict[Path, bytes | None]:
+    return {
+        path.relative_to(root): path.read_bytes() if path.is_file() else None
+        for path in sorted(root.rglob("*"))
+    }
+
+
 def test_write_stream_materializes_file_and_returns_metadata(
     storage: MediaStorage, media_root: Path
 ) -> None:
@@ -87,6 +94,23 @@ def test_rejects_symlinked_directory_escaping_root(
     assert not (outside / "payload.mp4").exists()
 
 
+def test_write_stream_rejection_leaves_outside_tree_byte_for_byte_unchanged(
+    storage: MediaStorage, media_root: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    (outside / "existing").mkdir(parents=True)
+    (outside / "existing" / "content.bin").write_bytes(b"untouched")
+    media_root.mkdir()
+    (media_root / "escape").symlink_to(outside)
+    before = snapshot_tree(outside)
+
+    with pytest.raises(UnsafeMediaPathError):
+        storage.write_stream("escape/nested/payload.bin", [CONTENT])
+
+    assert snapshot_tree(outside) == before
+    assert not (outside / "nested").exists()
+
+
 def test_failed_stream_never_exposes_partial_final_file_and_cleans_up(
     storage: MediaStorage,
 ) -> None:
@@ -126,3 +150,46 @@ def test_promote_file_rejects_unsafe_key(storage: MediaStorage, tmp_path: Path) 
 
     with pytest.raises(UnsafeMediaPathError):
         storage.promote_file("../escape.mp4", temporary)
+
+
+def test_promote_file_rejection_creates_nothing_outside_root(
+    storage: MediaStorage, media_root: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    (outside / "existing").mkdir(parents=True)
+    (outside / "existing" / "content.bin").write_bytes(b"untouched")
+    media_root.mkdir()
+    (media_root / "escape").symlink_to(outside)
+    temporary = tmp_path / "download.partial"
+    temporary.write_bytes(CONTENT)
+    before = snapshot_tree(outside)
+
+    with pytest.raises(UnsafeMediaPathError):
+        storage.promote_file("escape/a/b/c.bin", temporary)
+
+    assert snapshot_tree(outside) == before
+    assert not (outside / "a").exists()
+
+
+def test_delete_removes_contained_file_and_reports(storage: MediaStorage) -> None:
+    stored = storage.write_stream("local/to-delete.mp4", [CONTENT])
+
+    assert storage.delete(stored.key) is True
+    assert not stored.path.exists()
+    assert storage.delete(stored.key) is False
+
+
+def test_delete_refuses_to_unlink_through_escaping_symlink(
+    storage: MediaStorage, media_root: Path, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.bin"
+    secret.write_bytes(CONTENT)
+    media_root.mkdir()
+    (media_root / "escape").symlink_to(outside)
+
+    with pytest.raises(UnsafeMediaPathError):
+        storage.delete("escape/secret.bin")
+
+    assert secret.exists()
