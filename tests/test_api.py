@@ -23,10 +23,13 @@ TOKEN = "test-admin-token"
 
 
 def _settings(admin_token: str | None) -> Settings:
-    overrides: dict[str, str] = {}
-    if admin_token is not None:
-        overrides["admin_token"] = admin_token
-    return Settings(_env_file=None, media_root=Path("/tmp/oc-api-media"), **overrides)
+    # Pass admin_token explicitly (empty string means "unconfigured") so an ambient
+    # OPENCLIPS_ADMIN_TOKEN from the container env_file cannot leak into these tests.
+    return Settings(
+        _env_file=None,
+        media_root=Path("/tmp/oc-api-media"),
+        admin_token=admin_token or "",
+    )
 
 
 @pytest.fixture
