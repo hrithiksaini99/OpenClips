@@ -293,6 +293,26 @@ def test_retry_failed_job_creates_new_dispatch(client) -> None:
         assert event.queue_name == "default"
 
 
+def test_retry_rejects_unregistered_kind(client) -> None:
+    test_client, factory = client
+    with factory() as session:
+        jobs = JobRepository(session)
+        failed = jobs.create("legacy_unregistered_kind", payload=str(uuid4()))
+        jobs.transition(failed.id, JobEvent.START)
+        jobs.transition(failed.id, JobEvent.FAIL, error="legacy worker failure")
+        failed_id = failed.id
+        session.commit()
+
+    response = test_client.post(f"/api/v1/jobs/{failed_id}/retry", headers=_auth())
+
+    assert response.status_code == 409
+    assert "legacy_unregistered_kind" in response.json()["detail"]
+    with factory() as session:
+        refreshed = JobRepository(session).get(failed_id)
+        assert refreshed is not None
+        assert refreshed.status.value == "FAILED"
+
+
 def test_render_enqueue_requires_reviewable_clip(client) -> None:
     test_client, factory = client
     ids = _seed(factory)

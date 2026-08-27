@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from openclips.application.clipping import SELECT_CLIPS_JOB_KIND, ClipSelectionCoordinator
 from openclips.application.dispatch import OutboxRelay
 from openclips.application.health import make_database_probe
+from openclips.application.pipeline import KNOWN_JOB_KINDS
 from openclips.application.rendering import RENDER_CLIP_JOB_KIND, RenderCoordinator
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
 from openclips.application.youtube_ingestion import (
@@ -162,6 +163,13 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
             storage=storage,
         )
     )
+    registered = frozenset(handlers)
+    if registered != KNOWN_JOB_KINDS:
+        missing = sorted(KNOWN_JOB_KINDS - registered)
+        unexpected = sorted(registered - KNOWN_JOB_KINDS)
+        raise RuntimeError(
+            f"Worker handler registry mismatch: missing={missing}, unexpected={unexpected}"
+        )
     return handlers
 
 
@@ -264,7 +272,9 @@ def _process_payload(
         if handler is None:
             message = f"UnknownJobKindError: {job.kind}"
             logger.error("Job %s references unregistered kind: %s", payload, job.kind)
-            _fail_job(session_factory, payload, message)
+            jobs.transition(job.id, JobEvent.START)
+            jobs.transition(job.id, JobEvent.FAIL, error=message)
+            session.commit()
             return
         try:
             jobs.transition(job.id, JobEvent.START)

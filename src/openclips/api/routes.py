@@ -23,6 +23,7 @@ from openclips.api.schemas import (
 )
 from openclips.application.clipping import ClipSelectionCoordinator
 from openclips.application.ingestion import IngestionCoordinator
+from openclips.application.pipeline import is_known_job_kind
 from openclips.application.rendering import RenderCoordinator
 from openclips.application.services import AppServices
 from openclips.application.transcription import TranscriptionCoordinator
@@ -255,10 +256,13 @@ def build_router(
     )
     def retry_job(job_id: UUID, session: Session = Depends(get_session)) -> JobOut:
         _, jobs, _ = _repos(session)
+        current = jobs.get(job_id)
+        if current is None:
+            raise _not_found("Job", job_id)
+        if not is_known_job_kind(current.kind):
+            raise _conflict(f"Cannot retry unregistered job kind {current.kind!r}")
         try:
             job, _event = jobs.retry_dispatched(job_id)
-        except KeyError as error:
-            raise _not_found("Job", job_id) from error
         except InvalidTransitionError as error:
             raise _conflict(error) from error
         return JobOut.model_validate(job)
