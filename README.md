@@ -1,15 +1,17 @@
 # OpenClips
 
-OpenClips is a self-hosted, local-AI-first platform for turning podcast and interview videos into reviewable short-form clips. All six implementation phases are complete: ingestion, local transcription, clip selection, vertical rendering, the review API, and platform publishing.
+OpenClips is a self-hosted, local-AI-first platform for turning podcast and interview videos into reviewable short-form clips. It runs the whole pipeline durably: PostgreSQL owns jobs and a transactional outbox, the worker relays due events onto reliable Redis lists, and one authenticated upload or YouTube URL flows automatically from ingestion through transcription, selection, and 9:16 rendering.
 
 ## Pipeline
 
-1. **Ingest** a local `.mp4`/`.mov` upload or a YouTube watch URL (yt-dlp, shell-free).
-2. **Transcribe** locally with faster-whisper through durable queue jobs (`transcribe`).
-3. **Select** deterministic 20–90 second candidates with dead-air trimming and an LLM refiner contract (`select_clips`).
+1. **Ingest** a local `.mp4`/`.mov` upload (`POST /api/v1/sources/upload`, bounded streaming) or a YouTube watch URL (`POST /api/v1/sources/youtube`, background download via shell-free yt-dlp).
+2. **Transcribe** locally with faster-whisper through durable outbox-dispatched jobs (`transcribe`).
+3. **Select** deterministic candidates with dead-air trimming and an LLM refiner contract (`select_clips`).
 4. **Render** 9:16 media with caption templates, word highlighting, profanity masking, and transcript edits (`render_clip`).
 5. **Review** via the admin API and dashboard: edit, approve, reject, bulk actions.
 6. **Publish** approved clips to Instagram Reels and YouTube Shorts on independent per-platform queues with bounded backoff.
+
+When a source opts into automation (`auto_process`, the default), each successful stage dispatches its successor in the same database transaction, so the pipeline advances with no manual queue writes. Set `auto_process=false` to drive the stages manually through the existing per-stage endpoints. Model download progress is observable, without gating the pipeline, at `GET /api/v1/system/transcription-readiness`.
 
 ## Development
 
@@ -38,7 +40,17 @@ ruff check src tests
 mypy src
 ```
 
-Integration persistence tests run when `DATABASE_URL` points to PostgreSQL; otherwise they skip explicitly. Integration tests leave the shared database empty and unstamped, so run `alembic upgrade head` afterwards before using the live API.
+Integration persistence tests run when `DATABASE_URL` points to a disposable PostgreSQL database named `openclips_test_*` (and `REDIS_URL` for the Redis-backed tests); otherwise they skip explicitly. They never touch the developer database or named volumes.
+
+### Full verification gate
+
+`scripts/verify.sh` runs the complete gate in the Compose stack against a disposable database and a reserved Redis logical database, without disturbing the developer database, named volumes, or a running dev `api` service:
+
+```bash
+./scripts/verify.sh
+```
+
+It applies migrations, runs the full suite (including the real PostgreSQL/Redis/FFmpeg `upload → transcribe → select → render` integration test), Ruff, strict mypy, `alembic check`, and an HTTP `/health` + `/ready` smoke check on a one-off container. Run it with host ports 5432/6379 free (stop any other stack bound to them first).
 
 ## Review API
 

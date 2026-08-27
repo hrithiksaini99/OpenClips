@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from openclips.infrastructure.models import Base
 
@@ -24,6 +24,14 @@ def disposable_database_url(url: str | None) -> str:
     return url
 
 
+def _reset_schema(engine: object) -> None:
+    Base.metadata.drop_all(engine)  # type: ignore[arg-type]
+    # Leave the database unstamped so the next `alembic upgrade head`
+    # rebuilds everything cleanly instead of finding a phantom head.
+    with engine.begin() as connection:  # type: ignore[attr-defined]
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+
+
 @pytest.fixture
 def session() -> Iterator[Session]:
     url = disposable_database_url(os.getenv("DATABASE_URL"))
@@ -32,9 +40,16 @@ def session() -> Iterator[Session]:
     with Session(engine) as value:
         yield value
         value.rollback()
-    Base.metadata.drop_all(engine)
-    # Leave the database unstamped so the next `alembic upgrade head`
-    # rebuilds everything cleanly instead of finding a phantom head.
-    with engine.begin() as connection:
-        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    _reset_schema(engine)
+    engine.dispose()
+
+
+@pytest.fixture
+def session_factory() -> Iterator[sessionmaker[Session]]:
+    """A committing session factory over a disposable PostgreSQL database."""
+    url = disposable_database_url(os.getenv("DATABASE_URL"))
+    engine = create_engine(url)
+    Base.metadata.create_all(engine)
+    yield sessionmaker(bind=engine)
+    _reset_schema(engine)
     engine.dispose()

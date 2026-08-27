@@ -4,10 +4,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _resolved_compose() -> dict[str, object]:
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI is not available to resolve the Compose file")
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_root = Path(temporary_directory)
         compose_path = temporary_root / "docker-compose.yml"
