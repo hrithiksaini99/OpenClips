@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+from openclips.application.clipping import SELECT_CLIPS_JOB_KIND
 from openclips.application.pipeline import queue_for_job_kind
 from openclips.domain.jobs import JobStatus
 from openclips.domain.sources import SourceStatus
@@ -56,12 +57,24 @@ class TranscriptionCoordinator:
         return job
 
     def run(self, job: JobRecord) -> TranscriptRecord:
-        """Execute one claimed transcription job body without touching state."""
+        """Execute one claimed transcription job body without touching job state.
+
+        When the source opted into automation, a ``select_clips`` successor is
+        dispatched through the outbox in the same transaction as the transcript,
+        so the pipeline advances atomically with the stage that produced it.
+        """
         source = self._job_source(job)
         document: TranscriptDocument = self.provider.transcribe(
             self.storage.resolve(str(source.media_path))
         )
-        return self.transcripts.upsert_for_source(source.id, document)
+        record = self.transcripts.upsert_for_source(source.id, document)
+        if source.auto_process:
+            self.jobs.create_dispatched(
+                SELECT_CLIPS_JOB_KIND,
+                payload=str(source.id),
+                queue_name=queue_for_job_kind(SELECT_CLIPS_JOB_KIND),
+            )
+        return record
 
     def retry(self, job_id: UUID) -> JobRecord:
         """Requeue a failed transcription job so it can be executed again."""

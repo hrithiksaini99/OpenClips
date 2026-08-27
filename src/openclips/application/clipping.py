@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from openclips.application.pipeline import queue_for_job_kind
+from openclips.application.rendering import RENDER_CLIP_JOB_KIND
 from openclips.application.selection import build_candidates
 from openclips.domain.clips import ClipEvent
 from openclips.domain.selection import SelectionBounds
@@ -100,6 +101,13 @@ class ClipSelectionCoordinator:
             )
             self.clips.transition(record.id, ClipEvent.READY)
             records.append(record)
+        if source.auto_process:
+            for record in records:
+                self.jobs.create_dispatched(
+                    RENDER_CLIP_JOB_KIND,
+                    payload=str(record.id),
+                    queue_name=queue_for_job_kind(RENDER_CLIP_JOB_KIND),
+                )
         return records
 
     def _selected_source(self, source_id: UUID) -> SourceAssetRecord:

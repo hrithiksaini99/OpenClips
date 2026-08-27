@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from openclips.application.pipeline import queue_for_job_kind
+from openclips.application.transcription import TRANSCRIBE_JOB_KIND
 from openclips.domain.sources import (
     SOURCE_RETENTION_DAYS,
     SourceEvent,
@@ -84,10 +85,11 @@ class YouTubeIngestionCoordinator:
         """Execute one claimed ingest job body: download, promote, and mark ready.
 
         Source state advances only on the success path (``PENDING -> INGESTING
-        -> READY``). Any failure re-raises so the worker rolls the handler
-        session back — leaving the source ``PENDING`` and retryable through the
-        job — and preserves the downloader's error on the job. The partial file
-        is always removed, since it lives outside the transaction.
+        -> READY``), and an automatic source dispatches its ``transcribe``
+        successor in the same transaction. Any failure re-raises so the worker
+        rolls the handler session back — leaving the source ``PENDING`` and
+        retryable through the job — and preserves the downloader's error on the
+        job. The partial file is always removed, since it lives outside the txn.
         """
         if job.payload is None:
             msg = f"Ingest job {job.id} has no source payload"
@@ -104,9 +106,16 @@ class YouTubeIngestionCoordinator:
             self.downloader.download(source.original_locator, partial)
             key = self._storage_key(source)
             stored = self.storage.promote_file(key, partial)
-            return self.sources.attach_media(
+            ready = self.sources.attach_media(
                 source_id, media_path=stored.key, byte_size=stored.size_bytes
             )
+            if ready.auto_process:
+                self.jobs.create_dispatched(
+                    TRANSCRIBE_JOB_KIND,
+                    payload=str(ready.id),
+                    queue_name=queue_for_job_kind(TRANSCRIBE_JOB_KIND),
+                )
+            return ready
         finally:
             partial.unlink(missing_ok=True)
 
