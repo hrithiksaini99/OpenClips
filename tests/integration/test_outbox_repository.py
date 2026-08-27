@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import conftest as integration_conftest
 import pytest
 from sqlalchemy.orm import Session
 
@@ -10,6 +11,13 @@ from openclips.infrastructure.models import SourceAssetRecord
 from openclips.infrastructure.repositories import JobRepository, OutboxRepository
 
 pytestmark = pytest.mark.integration
+
+
+def test_disposable_database_url_rejects_developer_database() -> None:
+    with pytest.raises(pytest.UsageError, match="disposable PostgreSQL database"):
+        integration_conftest.disposable_database_url(
+            "postgresql+psycopg://openclips:openclips@localhost:5432/openclips"
+        )
 
 
 def test_create_dispatched_flushes_job_and_pending_outbox(session: Session) -> None:
