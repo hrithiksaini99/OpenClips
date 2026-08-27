@@ -1,30 +1,28 @@
 """PostgreSQL regression coverage for unknown claimed job kinds."""
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
-import conftest as integration_conftest
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from openclips.domain.jobs import JobStatus
 from openclips.domain.outbox import OutboxStatus
-from openclips.infrastructure.models import Base
 from openclips.infrastructure.repositories import JobRepository
 from openclips.worker import _process_payload
 
 pytestmark = pytest.mark.integration
 
 
-def test_unknown_job_kind_fails_without_locking_itself() -> None:
-    database_url = integration_conftest.disposable_database_url(os.getenv("DATABASE_URL"))
+def test_unknown_job_kind_fails_without_locking_itself(
+    session_factory: sessionmaker[Session],
+) -> None:
+    fixture_engine = session_factory.kw["bind"]
     engine = create_engine(
-        database_url,
+        fixture_engine.url,
         connect_args={"options": "-c lock_timeout=3000"},
     )
-    Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     try:
         with factory() as session:
@@ -55,5 +53,4 @@ def test_unknown_job_kind_fails_without_locking_itself() -> None:
             assert duplicate.status is JobStatus.FAILED
             assert duplicate.attempts == 1
     finally:
-        Base.metadata.drop_all(engine)
         engine.dispose()
