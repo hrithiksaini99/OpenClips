@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from openclips.domain.clips import ClipEvent, ClipStateMachine, ClipStatus
 from openclips.domain.jobs import JobEvent, JobStateMachine, JobStatus
+from openclips.domain.outbox import OutboxStatus
 from openclips.domain.publishing import (
     Platform,
     PublicationEvent,
@@ -17,6 +18,7 @@ from openclips.domain.transcripts import TranscriptDocument, TranscriptSegment, 
 from openclips.infrastructure.models import (
     ClipRecord,
     JobRecord,
+    OutboxRecord,
     PublicationRecord,
     SourceAssetRecord,
     TranscriptRecord,
@@ -32,6 +34,15 @@ class JobRepository:
         self.session.add(record)
         self.session.flush()
         return record
+
+    def create_dispatched(
+        self, kind: str, *, payload: str | None, queue_name: str
+    ) -> tuple[JobRecord, OutboxRecord]:
+        job = self.create(kind, payload=payload)
+        event = OutboxRecord(job_id=job.id, queue_name=queue_name)
+        self.session.add(event)
+        self.session.flush()
+        return job, event
 
     def get(self, job_id: UUID) -> JobRecord | None:
         return self.session.get(JobRecord, job_id)
@@ -61,6 +72,45 @@ class JobRepository:
             record.attempts += 1
         if error is not None:
             record.error = error
+        self.session.flush()
+        return record
+
+
+class OutboxRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def due(self, now: datetime, limit: int) -> list[OutboxRecord]:
+        return (
+            self.session.query(OutboxRecord)
+            .filter(
+                OutboxRecord.status == OutboxStatus.PENDING,
+                OutboxRecord.available_at <= now,
+            )
+            .order_by(OutboxRecord.available_at.asc(), OutboxRecord.id)
+            .with_for_update(skip_locked=True)
+            .limit(limit)
+            .all()
+        )
+
+    def mark_delivered(self, event_id: UUID, delivered_at: datetime) -> OutboxRecord:
+        record = self.session.get(OutboxRecord, event_id)
+        if record is None:
+            raise KeyError(event_id)
+        record.status = OutboxStatus.DELIVERED
+        record.delivered_at = delivered_at
+        self.session.flush()
+        return record
+
+    def mark_failed(
+        self, event_id: UUID, error: str, next_attempt_at: datetime
+    ) -> OutboxRecord:
+        record = self.session.get(OutboxRecord, event_id)
+        if record is None:
+            raise KeyError(event_id)
+        record.attempts += 1
+        record.last_error = error
+        record.available_at = next_attempt_at
         self.session.flush()
         return record
 

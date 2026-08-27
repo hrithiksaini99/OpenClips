@@ -9,15 +9,18 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     func,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from openclips.domain.clips import ClipStatus
 from openclips.domain.jobs import JobStatus
+from openclips.domain.outbox import OutboxStatus
 from openclips.domain.publishing import Platform, PublicationStatus
 from openclips.domain.sources import SourceKind, SourceStatus
 
@@ -37,6 +40,28 @@ class JobRecord(Base):
     )
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class OutboxRecord(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (Index("ix_outbox_events_due", "status", "available_at"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(ForeignKey("jobs.id"), index=True)
+    queue_name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[OutboxStatus] = mapped_column(
+        Enum(OutboxStatus, native_enum=False), default=OutboxStatus.PENDING
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -110,6 +135,7 @@ class SourceAssetRecord(Base):
         Enum(SourceStatus, native_enum=False), default=SourceStatus.PENDING
     )
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auto_process: Mapped[bool] = mapped_column(default=True, server_default=true())
     retain_until: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
