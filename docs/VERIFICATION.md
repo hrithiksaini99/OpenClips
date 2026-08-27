@@ -111,8 +111,18 @@ the disposable database and Redis db were dropped/flushed afterward.
   `model-cache` at `/root/.cache/huggingface` (read-only for API, read-write for
   worker), and both receive `OPENCLIPS_MEDIA_ROOT`, database, and Redis environment.
 
-Note: `scripts/verify.sh` provisions its own isolated Compose stack and requires
-host ports 5432/6379/8000 to be free. With another stack already bound to them, the
-equivalent gate above was run by executing the built image directly against the
-existing db/redis over the Compose network, using the same disposable-database and
-reserved-Redis discipline the script enforces.
+Full `scripts/verify.sh` run (2026-08-27, isolated `operational-core` Compose stack,
+host ports 5432/6379/8000 free): exit 0. It applied migrations (`No new upgrade
+operations detected`), ran the full suite against a disposable database and reserved
+Redis db 15 (246 passed, 1 skipped, 1 warning), passed Ruff and strict mypy, and
+completed the `/health` + `/ready` HTTP smoke check on a one-off container published
+to port 8001 — without disturbing the developer database, named volumes, or a
+running dev `api` service. `scripts/verify.sh` requires those host ports to be free;
+stop any other stack bound to them first.
+
+Fix found by this gate: running the suite via `docker compose run api pytest` loads
+the api service's `env_file: .env` (added with the shared runtime), which injected
+`OPENCLIPS_ADMIN_TOKEN` into the environment and made the fail-closed
+"unconfigured token" test see a configured token (401 instead of 503). The auth
+tests now pass the admin token explicitly so they are independent of the container
+environment.
