@@ -483,24 +483,83 @@ async function connectYouTube() {
   } catch (error) { showPubError(error.message); }
 }
 
+async function useClientFile(body) {
+  try {
+    ytStatus = await api('/api/youtube/client', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    renderAccount();
+    connectYouTube();          // straight on to the consent screen
+  } catch (error) { showPubError(error.message); }
+}
+
+function renderSetup(s) {
+  const found = s.detected || [];
+  $('acctCard').innerHTML = `
+    <div><div class="acct-name">Connect YouTube</div>
+    <div class="acct-sub">One-time setup, then it is a single click</div></div>
+    <div class="rule"></div>
+    ${found.length ? `
+      <div class="note" style="border-left-color:#7FB069;margin-bottom:14px">
+        Found this in your Downloads folder.</div>
+      ${found.map((file, index) => `
+        <div class="row" style="margin-bottom:10px">
+          <div style="min-width:0">
+            <div style="font-size:13px;font-weight:500;overflow-wrap:anywhere">${esc(file.name)}</div>
+            <div class="acct-sub">${esc(file.kind)} client · ${esc(file.client_id)}</div>
+          </div>
+          <button class="btn primary" data-use="${index}">Use this</button>
+        </div>`).join('')}
+      <div class="rule"></div>` : ''}
+    <ol style="margin:0;padding-left:19px;font-size:13px;line-height:1.9;color:var(--muted-fg)">
+      <li><a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener">Create
+        a Google Cloud project</a></li>
+      <li><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank"
+        rel="noopener">Enable YouTube Data API v3</a></li>
+      <li><a href="https://console.cloud.google.com/auth/branding" target="_blank" rel="noopener">Fill in
+        the consent screen</a> and set it to <b style="color:var(--fg)">In production</b></li>
+      <li><a href="https://console.cloud.google.com/apis/credentials/oauthclient" target="_blank"
+        rel="noopener">Create an OAuth client</a> of type <b style="color:var(--fg)">Desktop app</b>,
+        and download it</li>
+    </ol>
+    <div class="rule"></div>
+    <div id="drop" style="border:1px dashed var(--border-strong);border-radius:9px;padding:16px;
+      text-align:center;font-size:13px;color:var(--muted-fg);cursor:pointer">
+      Drop the downloaded JSON here, or <span style="color:var(--fg)">choose a file</span>
+    </div>
+    <input type="file" id="clientFile" accept="application/json,.json" style="display:none" />`;
+
+  $('acctCard').querySelectorAll('[data-use]').forEach((button) => {
+    button.onclick = () => useClientFile({ path: found[+button.dataset.use].path });
+  });
+  const read = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try { useClientFile({ payload: JSON.parse(reader.result) }); }
+      catch (error) { showPubError('That file is not valid JSON'); }
+    };
+    reader.readAsText(file);
+  };
+  const drop = $('drop');
+  drop.onclick = () => $('clientFile').click();
+  $('clientFile').onchange = (event) => read(event.target.files[0]);
+  drop.ondragover = (event) => { event.preventDefault(); drop.style.borderColor = 'var(--accent)'; };
+  drop.ondragleave = () => { drop.style.borderColor = ''; };
+  drop.ondrop = (event) => {
+    event.preventDefault(); drop.style.borderColor = '';
+    read(event.dataTransfer.files[0]);
+  };
+}
+
 function renderAccount() {
   const s = ytStatus || {};
-  if (!s.client_configured) {
-    $('acctCard').innerHTML = `
-      <div><div class="acct-name">YouTube account</div>
-      <div class="acct-sub">Not set up yet</div></div>
-      <div class="rule"></div>
-      <div class="note">Create an OAuth <b>Desktop app</b> client in Google Cloud, turn on the
-      YouTube Data API v3, and save the file it gives you as
-      <code>${esc(s.client_secret_path || 'config/client_secret.json')}</code>.
-      The README walks through it.</div>`;
-    return;
-  }
+  if (!s.client_configured) { renderSetup(s); return; }
   if (!s.connected) {
     $('acctCard').innerHTML = `
       <div class="row"><div><div class="acct-name">YouTube account</div>
       <div class="acct-sub">Not connected</div></div>
-      <button class="btn primary" id="connect">Connect</button></div>`;
+      <button class="btn primary" id="connect">Connect &amp; start posting</button></div>`;
     $('connect').onclick = connectYouTube;
     return;
   }

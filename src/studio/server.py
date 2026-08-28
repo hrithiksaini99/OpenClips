@@ -233,8 +233,30 @@ Return to the OpenClips tab.</p></div>""",
     )
 
 
+class ClientFile(BaseModel):
+    """The contents of the OAuth JSON Google hands you, pasted or dropped in."""
+
+    payload: dict[str, Any] | None = None
+    path: str | None = None
+
+
 @api.get("/youtube/status")
 def youtube_status() -> dict[str, Any]:
+    return youtube.status()
+
+
+@api.post("/youtube/client")
+def youtube_set_client(request: ClientFile) -> dict[str, Any]:
+    """Take the OAuth client file, so nobody has to move it into config/ by hand."""
+    try:
+        if request.path:
+            youtube.adopt_client(request.path)
+        elif request.payload:
+            youtube.save_client(request.payload)
+        else:
+            raise HTTPException(status_code=422, detail="Give a file or a path")
+    except youtube.SetupRequired as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
     return youtube.status()
 
 
@@ -259,7 +281,10 @@ def youtube_callback(
         youtube.complete(code=code, state=state, redirect_uri=_redirect_uri(request))
     except youtube.YouTubeError as failure:
         return _callback_page(str(failure), ok=False)
-    return _callback_page("Account connected.", ok=True)
+    # Arming here is what "connect and start posting" means: the account was
+    # just attached on purpose, and the schedule is the reason it was attached.
+    publisher.configure({"enabled": True})
+    return _callback_page("Account connected. Posting is on.", ok=True)
 
 
 @api.delete("/youtube/session")

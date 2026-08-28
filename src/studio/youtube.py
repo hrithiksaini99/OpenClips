@@ -50,6 +50,19 @@ SCOPES = (
     "https://www.googleapis.com/auth/youtube.readonly"
 )
 
+# A client shipped with OpenClips, so a user connects in one click without
+# visiting the Google Cloud console at all. Empty until this project has its own
+# audited OAuth client; when it does, setting these two makes every install
+# one-click. Note the quota is then shared across everyone using that client:
+# 100 uploads a day between them, which is the same trade rclone makes with its
+# bundled Drive client.
+BUNDLED_CLIENT_ID = os.environ.get("OPENCLIPS_YT_CLIENT_ID", "")
+BUNDLED_CLIENT_SECRET = os.environ.get("OPENCLIPS_YT_CLIENT_SECRET", "")
+
+# Where Chrome and Safari drop the file Google hands you.
+DOWNLOADS = Path.home() / "Downloads"
+_CLIENT_PATTERNS = ("client_secret*.json", "*googleusercontent*.json", "*oauth*client*.json")
+
 # 8 MiB per PUT: large enough that the per-request overhead is noise, small
 # enough that a dropped connection costs little to redo.
 CHUNK = 8 << 20
@@ -122,19 +135,86 @@ def _post_form(url: str, fields: dict[str, str]) -> dict:
         raise YouTubeError(f"Could not reach Google: {error.reason}") from None
 
 
-def client_config() -> dict[str, str]:
-    """Read the OAuth client downloaded from the Google Cloud console."""
-    if not CLIENT_SECRET.is_file():
-        raise SetupRequired(f"Save your Google OAuth client as {CLIENT_SECRET}")
-    try:
-        payload = json.loads(CLIENT_SECRET.read_text())
-    except json.JSONDecodeError:
-        raise SetupRequired(f"{CLIENT_SECRET.name} is not valid JSON") from None
-    # Google exports desktop clients under "installed" and web clients under "web".
-    block = payload.get("installed") or payload.get("web") or {}
-    if "client_id" not in block:
-        raise SetupRequired(f"{CLIENT_SECRET.name} is not a Google OAuth client file")
+def read_client(payload: dict) -> dict[str, str]:
+    """Pull the client out of a downloaded OAuth JSON file.
+
+    Google exports desktop clients under "installed" and web clients under
+    "web"; a user who pastes the inner object alone should also work.
+    """
+    block = payload.get("installed") or payload.get("web") or payload
+    if not isinstance(block, dict) or "client_id" not in block:
+        raise SetupRequired("That is not a Google OAuth client file")
     return block
+
+
+def save_client(payload: dict) -> dict[str, str]:
+    """Validate an OAuth client file and keep it, so the console is a one-off."""
+    block = read_client(payload)
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CLIENT_SECRET.write_text(json.dumps(payload, indent=2))
+    try:
+        os.chmod(CLIENT_SECRET, 0o600)
+    except OSError:
+        pass
+    return block
+
+
+def detect_clients() -> list[dict]:
+    """Look for the file Google just handed the user, in their Downloads folder.
+
+    Saves them finding the file and moving it into the project by hand, which is
+    the only genuinely fiddly step left in connecting an account.
+    """
+    if not DOWNLOADS.is_dir():
+        return []
+    seen: set[Path] = set()
+    found: list[dict] = []
+    for pattern in _CLIENT_PATTERNS:
+        for path in DOWNLOADS.glob(pattern):
+            if path in seen or not path.is_file() or path.stat().st_size > 64_000:
+                continue
+            seen.add(path)
+            try:
+                payload = json.loads(path.read_text())
+                block = read_client(payload)
+            except (json.JSONDecodeError, SetupRequired, OSError, UnicodeDecodeError):
+                continue  # some other JSON that happens to match the name
+            found.append(
+                {
+                    "path": str(path),
+                    "name": path.name,
+                    "client_id": block["client_id"][:24] + "…",
+                    "kind": "web" if "web" in payload else "desktop",
+                    "modified": path.stat().st_mtime,
+                }
+            )
+    found.sort(key=lambda item: -item["modified"])
+    return found[:5]
+
+
+def adopt_client(path: str) -> dict[str, str]:
+    """Copy a detected file into config/ and use it."""
+    source = Path(path).expanduser().resolve()
+    # Only ever adopt from the Downloads folder we advertised, so a stray path
+    # from the browser cannot make the server read somewhere else.
+    if DOWNLOADS.resolve() not in source.parents:
+        raise SetupRequired("That file is not in your Downloads folder")
+    try:
+        return save_client(json.loads(source.read_text()))
+    except json.JSONDecodeError:
+        raise SetupRequired(f"{source.name} is not valid JSON") from None
+
+
+def client_config() -> dict[str, str]:
+    """The OAuth client to authorise against: the user's, or the bundled one."""
+    if CLIENT_SECRET.is_file():
+        try:
+            return read_client(json.loads(CLIENT_SECRET.read_text()))
+        except json.JSONDecodeError:
+            raise SetupRequired(f"{CLIENT_SECRET.name} is not valid JSON") from None
+    if BUNDLED_CLIENT_ID:
+        return {"client_id": BUNDLED_CLIENT_ID, "client_secret": BUNDLED_CLIENT_SECRET}
+    raise SetupRequired("No Google OAuth client has been added yet")
 
 
 def _pkce() -> tuple[str, str]:
@@ -300,14 +380,17 @@ def channel() -> Channel:
 
 def status() -> dict:
     """Describe the attachment state for the UI. Never raises."""
+    configured = CLIENT_SECRET.is_file() or bool(BUNDLED_CLIENT_ID)
     state: dict = {
         "connected": False,
-        "client_configured": CLIENT_SECRET.is_file(),
+        "client_configured": configured,
+        "client_bundled": not CLIENT_SECRET.is_file() and bool(BUNDLED_CLIENT_ID),
         "client_secret_path": str(CLIENT_SECRET),
+        "detected": [] if configured else detect_clients(),
         "channel": None,
         "error": "",
     }
-    if not state["client_configured"] or not connected():
+    if not configured or not connected():
         return state
     state["connected"] = True
     try:

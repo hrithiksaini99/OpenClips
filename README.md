@@ -175,19 +175,39 @@ Two smaller things worth knowing:
 
 ### Setting it up
 
-1. Open the [Google Cloud console](https://console.cloud.google.com/) and create
-   a project.
-2. Under **APIs & Services → Library**, enable **YouTube Data API v3**.
-3. Under **OAuth consent screen**, fill in the app name and your email, and add
-   the scopes `youtube.upload` and `youtube.readonly`. **Set the publishing
-   status to "In production".** Left in "Testing", Google revokes the login
-   after seven days and the schedule stops posting with no obvious cause.
-4. Under **Credentials**, create an **OAuth client ID** of type **Desktop app**
-   and download the JSON.
-5. Save it as `config/client_secret.json` in this repository. (`config/` is
-   git-ignored, along with the token stored beside it.)
-6. Start the server, scroll to **Publishing**, and press **Connect**. Google's
-   consent screen opens in a new tab; approve it there and the panel picks it up.
+Hosted tools like Opus Clip and Repurpose.io connect in one click because they
+are approved YouTube API partners: one audited Google Cloud project of their
+own, which every customer signs into. A tool you run yourself has no such
+project, so the first connection needs one — the same trade rclone makes with
+Google Drive. It is a one-off, and the **Publishing** panel walks through it
+with a direct link for each step:
+
+1. Create a Google Cloud project.
+2. Enable **YouTube Data API v3**.
+3. Fill in the OAuth consent screen and **set it to "In production"**. Left in
+   "Testing", Google revokes the login after seven days and the schedule stops
+   posting with no obvious cause.
+4. Create an **OAuth client ID** of type **Desktop app** and download the JSON.
+
+Then drop that file onto the panel, or just press **Use this** — OpenClips looks
+in your Downloads folder and offers the file Google gave you. The consent screen
+opens, you approve it, and posting starts. The file is copied to `config/`, which
+is git-ignored along with the token stored beside it.
+
+After that first setup, connecting an account is one click.
+
+### Shipping a one-click build
+
+If you run an OpenClips project that has passed the YouTube API audit, set
+
+```bash
+export OPENCLIPS_YT_CLIENT_ID=…apps.googleusercontent.com
+export OPENCLIPS_YT_CLIENT_SECRET=…
+```
+
+and the console steps disappear for everyone using that build: the panel goes
+straight to **Connect**. Be aware the 100-uploads-a-day bucket is then shared
+between all of them.
 
 ### Running it
 
