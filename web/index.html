@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenClips Studio</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #14181d; --line: #232a32;
+    --text: #e9eef5; --muted: #8b97a6; --accent: #ffd600; --accent2: #22c55e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 20px 28px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 14px; position: sticky; top: 0;
+    background: rgba(11,13,16,.92); backdrop-filter: blur(8px); z-index: 10;
+  }
+  h1 { font-size: 19px; margin: 0; letter-spacing: -.3px; }
+  h1 span { color: var(--accent); }
+  header small { color: var(--muted); }
+  main { padding: 24px 28px 80px; max-width: 1400px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .5px; }
+  input, select {
+    background: #0e1216; border: 1px solid var(--line); color: var(--text);
+    padding: 11px 13px; border-radius: 8px; font-size: 14px; font-family: inherit;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  #source { flex: 1; min-width: 340px; }
+  button {
+    background: var(--accent); color: #101010; border: 0; padding: 12px 20px;
+    border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; font-family: inherit;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 500; }
+  .progress { margin-top: 16px; display: none; }
+  .progress.on { display: block; }
+  .bar { height: 6px; background: #0e1216; border-radius: 999px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+  .status { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; margin-top: 26px; }
+  .clip { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .clip video { width: 100%; aspect-ratio: 9/16; background: #000; display: block; }
+  .clip .meta { padding: 12px 14px 14px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .clip .title { font-weight: 600; font-size: 14px; line-height: 1.35; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+  .tag { background: #0e1216; border: 1px solid var(--line); padding: 3px 8px; border-radius: 999px; }
+  .tag.score { color: var(--accent); border-color: #3a3413; }
+  .actions { display: flex; gap: 8px; margin-top: auto; }
+  .actions a { flex: 1; text-align: center; text-decoration: none; font-size: 13px; padding: 8px; border-radius: 7px; background: #0e1216; border: 1px solid var(--line); color: var(--text); }
+  .actions a:hover { border-color: var(--accent); }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; }
+  .err { color: #ff6b6b; font-size: 13px; margin-top: 10px; white-space: pre-wrap; }
+  .jobs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .jobs button { background: #0e1216; color: var(--muted); border: 1px solid var(--line); font-weight: 500; padding: 7px 12px; font-size: 13px; }
+  .jobs button.active { border-color: var(--accent); color: var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Open<span>Clips</span> Studio</h1>
+  <small>podcast → postable vertical clips, locally</small>
+</header>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <div id="source-wrap" style="flex:1; min-width:340px;">
+        <label for="source">YouTube URL or local file path</label>
+        <input id="source" placeholder="https://www.youtube.com/watch?v=… or /path/to/episode.mp4" />
+      </div>
+      <div>
+        <label for="count">Clips</label>
+        <select id="count">
+          <option>8</option><option selected>12</option><option>16</option><option>20</option>
+        </select>
+      </div>
+      <div>
+        <label for="model">Model</label>
+        <select id="model">
+          <option value="tiny">tiny (fastest)</option>
+          <option value="base">base</option>
+          <option value="small" selected>small (recommended)</option>
+          <option value="medium">medium (best)</option>
+        </select>
+      </div>
+      <div>
+        <label for="workers">Parallel</label>
+        <select id="workers">
+          <option>2</option><option selected>4</option><option>6</option><option>8</option>
+        </select>
+      </div>
+      <button id="go">Generate clips</button>
+    </div>
+
+    <div class="progress" id="progress">
+      <div class="status"><span id="stage">Starting…</span><span id="pct">0%</span></div>
+      <div class="bar"><i id="fill"></i></div>
+      <div class="err" id="err"></div>
+    </div>
+
+    <div class="jobs" id="jobs"></div>
+  </div>
+
+  <div id="results" class="grid"></div>
+  <div class="empty" id="empty">No clips yet — paste a podcast link above and hit Generate.</div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let current = null, timer = null;
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+  return response.json();
+}
+
+function fmt(seconds) {
+  const m = Math.floor(seconds / 60), s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function renderClips(job) {
+  const results = $('results');
+  $('empty').style.display = job && job.clips.length ? 'none' : 'block';
+  if (!job) { results.innerHTML = ''; return; }
+  results.innerHTML = job.clips.map((clip) => `
+    <div class="clip">
+      <video controls preload="metadata" poster="/api/jobs/${job.id}/file/${clip.thumbnail}"
+             src="/api/jobs/${job.id}/file/${clip.file}"></video>
+      <div class="meta">
+        <div class="title">${clip.title.replace(/</g, '&lt;')}</div>
+        <div class="tags">
+          <span class="tag">${fmt(clip.duration)}</span>
+          <span class="tag">@ ${fmt(clip.start)}</span>
+          <span class="tag score">${clip.score.toFixed(1)}</span>
+        </div>
+        <div class="actions">
+          <a href="/api/jobs/${job.id}/file/${clip.file}" download>Download</a>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function paint(job) {
+  const done = job.status === 'done', failed = job.status === 'error';
+  $('progress').classList.add('on');
+  $('stage').textContent = job.message || job.stage;
+  $('pct').textContent = Math.round((job.progress || 0) * 100) + '%';
+  $('fill').style.width = ((job.progress || 0) * 100) + '%';
+  $('err').textContent = failed ? job.error : '';
+  $('go').disabled = !(done || failed);
+  renderClips(job);
+  if (done || failed) { clearInterval(timer); timer = null; loadJobs(); }
+}
+
+async function poll(id) {
+  clearInterval(timer);
+  timer = setInterval(async () => {
+    try { paint(await api('/api/jobs/' + id)); } catch (e) { clearInterval(timer); }
+  }, 1200);
+  paint(await api('/api/jobs/' + id));
+}
+
+async function loadJobs() {
+  const jobs = await api('/api/jobs');
+  $('jobs').innerHTML = jobs.map((job) => `
+    <button data-id="${job.id}" class="${job.id === current ? 'active' : ''}">
+      ${job.title || job.source.slice(0, 28)} · ${job.clips.length} clips
+    </button>`).join('');
+  $('jobs').querySelectorAll('button').forEach((button) => {
+    button.onclick = async () => { current = button.dataset.id; await poll(current); loadJobs(); };
+  });
+}
+
+$('go').onclick = async () => {
+  const source = $('source').value.trim();
+  if (!source) return;
+  $('go').disabled = true;
+  $('err').textContent = '';
+  try {
+    const { id } = await api('/api/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source,
+        max_clips: +$('count').value,
+        model: $('model').value,
+        workers: +$('workers').value,
+      }),
+    });
+    current = id;
+    await poll(id);
+    loadJobs();
+  } catch (error) {
+    $('err').textContent = error.message;
+    $('go').disabled = false;
+  }
+};
+
+$('source').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('go').click(); });
+
+loadJobs().then(async () => {
+  const jobs = await api('/api/jobs');
+  if (jobs.length) { current = jobs[0].id; await poll(current); loadJobs(); }
+});
+</script>
+</body>
+</html>

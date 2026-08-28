@@ -8,3 +8,9 @@ __pycache__/
 data/
 *.pyc
 .worktrees/
+
+# native studio
+.venv-native/
+media/
+clips/
+_inspect/
