@@ -17,3 +17,6 @@ _inspect/
 .DS_Store
 codex-session-01.md
 progress.md
+
+# third-party skill, installed locally (upstream: nextlevelbuilder/ui-ux-pro-max-skill)
+.claude/skills/ui-ux-pro-max/
