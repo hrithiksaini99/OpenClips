@@ -229,6 +229,39 @@ A slot only fires while the server is running. If the machine was asleep at
 09:00 the clip still posts when it wakes, but only within two hours of the slot
 — otherwise starting the app in the evening would fire the whole day at once.
 
+## Storage
+
+One episode leaves about 3.2 GB behind: the source MP4, its audio track, and the
+clips. The **Storage** card in the Publishing panel shows what is held and
+controls two clean-ups, both on by default:
+
+- **Delete the episode once clips are made** — frees the ~2.9 GB source as soon
+  as every clip has rendered. The cost is that re-running that episode
+  re-downloads it in full, since this is the same cache that made re-runs free.
+- **Delete a clip once it is posted** — frees the MP4 after YouTube confirms the
+  upload. The thumbnail is kept, so the clip still appears in the grid with a
+  link to the video.
+
+Neither ever touches a local file you pointed the app at, and neither runs on a
+job that failed.
+
+## Thumbnails
+
+Every clip gets a 1280x720 thumbnail: a frame from the original episode with the
+hook drawn across it. The frame comes from the source rather than the rendered
+clip, because the render has captions burned in and they read as clutter behind
+the thumbnail's own text.
+
+It is offered to YouTube with `thumbnails.set` after the upload lands. Expect
+this to be refused at first: custom thumbnails need a phone-verified channel,
+Shorts thumbnails additionally need Partner Programme membership, and YouTube's
+July 2026 rollout describes Shorts thumbnails as a Studio feature, so the API
+may decline them for now. A refusal is recorded against the queue entry and
+never fails the post.
+
+Worth knowing either way: a Shorts thumbnail never shows in the vertical Shorts
+feed. It shows in search, the channel grid, the Shorts shelf and subscriptions.
+
 ## Repository layout
 
 ```

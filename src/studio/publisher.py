@@ -55,6 +55,7 @@ class Entry:
     duration: float = 0.0
     created_at: float = field(default_factory=time.time)
     posted_at: float = 0.0
+    freed: int = 0  # bytes reclaimed by deleting the clip after posting
 
 
 @dataclass
@@ -73,8 +74,21 @@ class Schedule:
 
 
 @dataclass
+class Storage:
+    """What to throw away once it has done its job.
+
+    Both are permanent deletions, so both are toggles. Dropping sources undoes
+    the download cache: re-running an episode then re-fetches the whole file.
+    """
+
+    delete_source_after_render: bool = True
+    delete_clip_after_post: bool = True
+
+
+@dataclass
 class Board:
     schedule: Schedule = field(default_factory=Schedule)
+    storage: Storage = field(default_factory=Storage)
     queue: list[Entry] = field(default_factory=list)
     claimed: list[str] = field(default_factory=list)  # slot keys already fired
     last_error: str = ""
@@ -99,6 +113,7 @@ def load() -> Board:
         return Board()  # a writer was mid-swap; the next read sees it
     return Board(
         schedule=Schedule(**_only_known(payload.get("schedule", {}), Schedule)),
+        storage=Storage(**_only_known(payload.get("storage", {}), Storage)),
         queue=[Entry(**_only_known(item, Entry)) for item in payload.get("queue", [])],
         claimed=list(payload.get("claimed", []))[-64:],
         last_error=payload.get("last_error", ""),
@@ -110,6 +125,7 @@ def save(board: Board) -> None:
         STATE_FILE,
         {
             "schedule": asdict(board.schedule),
+            "storage": asdict(board.storage),
             "queue": [asdict(entry) for entry in board.queue],
             "claimed": board.claimed[-64:],
             "last_error": board.last_error,
@@ -283,8 +299,12 @@ def configure(changes: dict) -> Schedule:
     with _lock:
         board = load()
         for key, value in changes.items():
-            if key in Schedule.__dataclass_fields__ and value is not None:
+            if value is None:
+                continue
+            if key in Schedule.__dataclass_fields__:
                 setattr(board.schedule, key, value)
+            elif key in Storage.__dataclass_fields__:
+                setattr(board.storage, key, value)
         save(board)
         return board.schedule
 
@@ -316,7 +336,7 @@ def claim_now(entry_id: str) -> Entry:
     raise LookupError("Entry not found")
 
 
-def _finish(entry_id: str, *, video_id: str = "", error: str = "") -> None:
+def _finish(entry_id: str, *, video_id: str = "", error: str = "", note: str = "") -> None:
     with _lock:
         board = load()
         for entry in board.queue:
@@ -326,7 +346,14 @@ def _finish(entry_id: str, *, video_id: str = "", error: str = "") -> None:
                 entry.status = "posted"
                 entry.video_id = video_id
                 entry.posted_at = time.time()
-                entry.error = ""
+                entry.error = note
+                # The clip is on YouTube now, so the local copy is redundant.
+                # Recording the id on the job first means the results grid can
+                # link to the video instead of a file that is no longer there.
+                entry.freed = pipeline.mark_published(
+                    entry.job_id, entry.clip_id, video_id,
+                    drop_file=board.storage.delete_clip_after_post,
+                )
             else:
                 entry.attempts += 1
                 entry.error = error
@@ -432,7 +459,19 @@ class Scheduler:
         except Exception as error:
             _finish(entry_id, error=f"{type(error).__name__}: {error}")
             return
-        _finish(entry_id, video_id=video_id)
+        # Cosmetic, and commonly refused, so it happens after the upload is
+        # already banked and never turns a posted clip into a failed one.
+        note = ""
+        clip = pipeline.read_state(entry.job_id)
+        record = next((c for c in clip.clips if c.id == entry.clip_id), None) if clip else None
+        if record and record.poster:
+            poster = pipeline.job_dir(entry.job_id) / record.poster
+            if poster.is_file():
+                try:
+                    youtube.set_thumbnail(video_id, poster)
+                except Exception as error:
+                    note = f"Posted, but the thumbnail was refused: {error}"
+        _finish(entry_id, video_id=video_id, note=note)
 
 
 scheduler = Scheduler()

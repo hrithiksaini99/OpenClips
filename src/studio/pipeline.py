@@ -27,6 +27,7 @@ from studio.llm import ClipRanker
 from studio.tools import binary
 from studio.render import render_clip
 from studio.select import ClipCandidate, find_clips
+from studio.thumbnail import build as build_thumbnail
 from studio.transcript import Word, build_sentences, load_words
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,9 @@ class ClipRecord:
     score: float
     text: str
     file: str
-    thumbnail: str = ""
+    thumbnail: str = ""   # small still, used as the poster in the results grid
+    poster: str = ""      # 1280x720 thumbnail offered to YouTube
+    video_id: str = ""    # set once posted; the clip file may then be gone
 
 
 @dataclass
@@ -554,7 +557,23 @@ def _render_one(payload: dict[str, Any]) -> dict[str, Any]:
         capture_output=True,
         timeout=120,
     )
-    return {"id": payload["id"], "thumbnail": thumbnail.name}
+    # Built from the original episode rather than the render: the render has
+    # captions burned in, which read as clutter behind the thumbnail's own text.
+    poster = Path(payload["destination"]).with_name(Path(payload["destination"]).stem + "-yt.jpg")
+    try:
+        build_thumbnail(
+            Path(payload["source"]),
+            poster,
+            payload.get("title", ""),
+            at=payload["start"] + min(4.0, (payload["end"] - payload["start"]) / 3),
+        )
+    except Exception:
+        poster = None  # a missing thumbnail must not lose the clip
+    return {
+        "id": payload["id"],
+        "thumbnail": thumbnail.name,
+        "poster": poster.name if poster else "",
+    }
 
 
 def rank_candidates(
@@ -616,6 +635,7 @@ def run_job(
     transcript_path: Path | None = None,
     face_track: bool = True,
     use_llm: bool = True,
+    delete_source: bool = False,
 ) -> JobState:
     """Take a URL or local file all the way to rendered clips on disk."""
     directory = job_dir(job_id)
@@ -701,6 +721,7 @@ def run_job(
                     "destination": str(destination),
                     "start": candidate.start,
                     "end": candidate.end,
+                    "title": candidate.title,
                     "words": window,
                     "style": asdict(CaptionStyle()),
                     "face_track": face_track,
@@ -729,6 +750,7 @@ def run_job(
             for future in as_completed(futures):
                 result = future.result()
                 records[result["id"]].thumbnail = result["thumbnail"]
+                records[result["id"]].poster = result["poster"]
                 done += 1
                 report(
                     "render",
@@ -738,7 +760,15 @@ def run_job(
 
         state.clips = [records[payload["id"]] for payload in payloads]
         state.status = "done"
-        report("done", 1.0, f"{len(state.clips)} clips ready")
+        # Only once every clip is rendered, and only for a source we downloaded:
+        # a local file belongs to the user, and a failed run needs its source to
+        # be re-runnable.
+        done_message = f"{len(state.clips)} clips ready"
+        if delete_source and is_remote(state.source):
+            freed = discard_source(state.source)
+            if freed:
+                done_message += f" · {freed / 1e9:.1f} GB freed"
+        report("done", 1.0, done_message)
     except Exception as error:  # surface the failure in the UI rather than dying silently
         state.status = "error"
         state.error = f"{type(error).__name__}: {error}"
@@ -747,6 +777,60 @@ def run_job(
         report("error", state.progress, state.error)
     write_state(state)
     return state
+
+
+def discard_source(url: str) -> int:
+    """Delete the downloaded episode for `url`, returning the bytes freed.
+
+    Only ever touches the cache under media/source, which OpenClips downloaded
+    itself; a local file the user pointed at is not ours to remove.
+    """
+    base = MEDIA_DIR / "source" / cache_key(url)
+    freed = 0
+    for path in base.parent.glob(f"{base.name}.*"):
+        try:
+            size = path.stat().st_size
+            path.unlink()
+            freed += size
+        except OSError:
+            continue
+    return freed
+
+
+def mark_published(job_id: str, clip_id: str, video_id: str, *, drop_file: bool) -> int:
+    """Record that a clip is on YouTube, optionally deleting the local MP4.
+
+    The small poster JPEG is kept whatever happens: it costs 22 KB and it is
+    what lets the results grid still show the clip once the video is gone.
+    """
+    state = read_state(job_id)
+    if state is None:
+        return 0
+    freed = 0
+    for clip in state.clips:
+        if clip.id != clip_id:
+            continue
+        clip.video_id = video_id
+        if drop_file:
+            path = job_dir(job_id) / clip.file
+            try:
+                freed = path.stat().st_size
+                path.unlink()
+            except OSError:
+                freed = 0
+        write_state(state)
+        break
+    return freed
+
+
+def disk_usage() -> dict[str, int]:
+    """Bytes held by downloaded sources and by rendered clips."""
+    def total(root: Path) -> int:
+        if not root.is_dir():
+            return 0
+        return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+
+    return {"media": total(MEDIA_DIR), "clips": total(CLIPS_DIR)}
 
 
 def clear_job(job_id: str) -> None:

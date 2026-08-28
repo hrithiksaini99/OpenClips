@@ -128,6 +128,23 @@
           transition: border-color var(--t), transform var(--t); }
   .clip:hover { border-color: var(--border-strong); }
   .clip video { width: 100%; aspect-ratio: 9/16; background: #000; display: block; }
+  .posted-still { width: 100%; aspect-ratio: 9/16; background: #000 center/cover no-repeat;
+                  display: grid; place-items: end center; padding-bottom: 14px; position: relative; }
+  .posted-still::after { content: ''; position: absolute; inset: 0;
+                         background: linear-gradient(transparent 55%, rgba(0,0,0,.75)); }
+  .posted-badge { position: relative; z-index: 1; font-size: 11px; font-weight: 500;
+                  padding: 4px 11px; border-radius: 999px; color: #7FB069;
+                  background: rgba(10,10,12,.8); border: 1px solid rgba(127,176,105,.35); }
+  .store { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+  .store b { font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
+  .bars { display: flex; height: 7px; border-radius: 999px; overflow: hidden;
+          background: var(--muted); margin: 12px 0 9px; }
+  .bars i { display: block; }
+  .bars .m { background: var(--accent); }
+  .bars .c { background: var(--muted-fg); }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted-fg); }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .legend i { width: 8px; height: 8px; border-radius: 2px; display: block; }
   .meta { padding: 13px 15px 15px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
   .title { font-weight: 600; font-size: 14px; line-height: 1.4; }
   .tags { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -319,6 +336,7 @@
       <div class="pub-col">
         <div class="card" id="acctCard"></div>
         <div class="card" id="schedCard"></div>
+        <div class="card" id="storeCard"></div>
       </div>
       <div class="card" id="queueCard"></div>
     </div>
@@ -334,6 +352,7 @@ const STEPS = [
   { key: 'render',     label: 'Render',     stages: ['render'] },
 ];
 const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+const YT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17a24 24 0 0 1 0-10 2 2 0 0 1 1.4-1.4 49 49 0 0 1 16.2 0A2 2 0 0 1 21.5 7a24 24 0 0 1 0 10 2 2 0 0 1-1.4 1.4 49 49 0 0 1-16.2 0A2 2 0 0 1 2.5 17"/><path d="m10 15 5-3-5-3z"/></svg>';
 const DOWNLOAD_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>';
 
 let current = null, pollTimer = null, misses = 0, clipSignature = '', startedAt = 0;
@@ -371,13 +390,24 @@ function renderClips(job) {
     $('clipCount').textContent = `${job.clips.length} clips · ${fmt(total)} total`;
     $('downloadAll').href = `/api/jobs/${job.id}/download`;
   }
-  const signature = job.id + ':' + job.clips.map((c) => c.file).join(',') + ':' + rendering;
+  const signature = job.id + ':' + job.clips.map((c) => c.file + c.video_id).join(',') + ':' + rendering;
   if (signature === clipSignature) return;   // never rebuild mid-playback
   clipSignature = signature;
-  const cards = job.clips.map((clip) => `
-    <article class="clip">
-      <video controls preload="metadata" poster="/api/jobs/${job.id}/file/${clip.thumbnail}"
-             src="/api/jobs/${job.id}/file/${clip.file}"></video>
+  const cards = job.clips.map((clip) => {
+    // Once a clip is posted its file is deleted, so the card shows the kept
+    // still and links to YouTube rather than a <video> with a dead src.
+    const posted = Boolean(clip.video_id);
+    const media = posted
+      ? `<div class="posted-still" style="background-image:url('/api/jobs/${job.id}/file/${clip.thumbnail}')">
+           <span class="posted-badge">On YouTube</span></div>`
+      : `<video controls preload="metadata" poster="/api/jobs/${job.id}/file/${clip.thumbnail}"
+               src="/api/jobs/${job.id}/file/${clip.file}"></video>`;
+    const action = posted
+      ? `<a class="dl" href="https://youtu.be/${encodeURIComponent(clip.video_id)}"
+           target="_blank" rel="noopener">${YT_ICON} Watch on YouTube</a>`
+      : `<a class="dl" href="/api/jobs/${job.id}/file/${clip.file}" download>${DOWNLOAD_ICON} Download</a>`;
+    return `<article class="clip">
+      ${media}
       <div class="meta">
         <div class="title">${esc(clip.title)}</div>
         <div class="tags">
@@ -385,9 +415,10 @@ function renderClips(job) {
           <span class="tag">at ${fmt(clip.start)}</span>
           <span class="tag score">${clip.score.toFixed(0)}</span>
         </div>
-        <a class="dl" href="/api/jobs/${job.id}/file/${clip.file}" download>${DOWNLOAD_ICON} Download</a>
+        ${action}
       </div>
-    </article>`).join('');
+    </article>`;
+  }).join('');
   // Skeletons stand in for clips still encoding, so the layout never jumps.
   const pending = rendering ? '<div class="skeleton"><div class="ph"></div></div>'.repeat(3) : '';
   results.innerHTML = cards + pending;
@@ -470,7 +501,9 @@ $('source').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').
 
 
 // ---------------------------------------------------------------- publishing
-let ytStatus = null, board = null;
+let ytStatus = null, board = null, storage = null;
+const gb = (bytes) => bytes >= 1e9 ? (bytes / 1e9).toFixed(1) + ' GB'
+  : bytes >= 1e6 ? Math.round(bytes / 1e6) + ' MB' : Math.round(bytes / 1e3) + ' KB';
 const PRIVACY = ['private', 'unlisted', 'public'];
 const PRESETS = [
   { label: 'Twice a day', hours: [9, 19] },
@@ -493,12 +526,13 @@ function showPubError(message) {
 
 async function refreshPublishing() {
   try {
-    const [status, queue] = await Promise.all([api('/api/youtube/status'), api('/api/queue')]);
-    ytStatus = status; board = queue;
+    const [status, queue, disk] = await Promise.all([
+      api('/api/youtube/status'), api('/api/queue'), api('/api/storage')]);
+    ytStatus = status; board = queue; storage = disk;
   } catch (error) { return; }   // the job poll loop already reports lost contact
   const failed = board.entries.filter((e) => e.status === 'failed').length;
   $('pubSummary').textContent = failed ? board.last_error : '';
-  renderAccount(); renderSchedule(); renderQueue();
+  renderAccount(); renderSchedule(); renderStorage(); renderQueue();
 }
 
 async function connectYouTube() {
@@ -677,6 +711,39 @@ function renderSchedule() {
   $('schedCard').querySelectorAll('[data-preset]').forEach((button) => {
     button.onclick = () => save({ slots: PRESETS[+button.dataset.preset].hours.map(asSlot) });
   });
+}
+
+function renderStorage() {
+  const s = storage || { media: 0, clips: 0, total: 0, reclaimed: 0 };
+  const share = (part) => s.total ? (part / s.total * 100).toFixed(1) : 0;
+  $('storeCard').innerHTML = `
+    <div class="row">
+      <div><div class="acct-name">Storage</div>
+        <div class="acct-sub">${s.reclaimed ? `${gb(s.reclaimed)} reclaimed so far` : 'Nothing reclaimed yet'}</div></div>
+      <div class="store"><b>${gb(s.total)}</b></div>
+    </div>
+    <div class="bars">
+      <i class="m" style="width:${share(s.media)}%"></i><i class="c" style="width:${share(s.clips)}%"></i>
+    </div>
+    <div class="legend">
+      <span><i class="m" style="background:var(--accent)"></i>Sources ${gb(s.media)}</span>
+      <span><i class="c" style="background:var(--muted-fg)"></i>Clips ${gb(s.clips)}</span>
+    </div>
+    <div class="rule"></div>
+    <div class="row"><div style="font-size:13px;padding-right:8px">Delete the episode once clips are made
+      <div class="acct-sub">Re-running it downloads the whole file again</div></div>
+      <label class="switch"><input type="checkbox" id="delSrc"
+        ${s.delete_source_after_render ? 'checked' : ''} /><span></span></label></div>
+    <div class="rule"></div>
+    <div class="row"><div style="font-size:13px;padding-right:8px">Delete a clip once it is posted
+      <div class="acct-sub">The thumbnail is kept, so the card still shows it</div></div>
+      <label class="switch"><input type="checkbox" id="delClip"
+        ${s.delete_clip_after_post ? 'checked' : ''} /><span></span></label></div>`;
+  const save = (changes) => api('/api/schedule', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
+  }).then(refreshPublishing).catch((error) => showPubError(error.message));
+  $('delSrc').onchange = (event) => save({ delete_source_after_render: event.target.checked });
+  $('delClip').onchange = (event) => save({ delete_clip_after_post: event.target.checked });
 }
 
 function entryRow(entry) {

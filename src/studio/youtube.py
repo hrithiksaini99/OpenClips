@@ -41,6 +41,7 @@ TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 REVOKE_ENDPOINT = "https://oauth2.googleapis.com/revoke"
 UPLOAD_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/videos"
 CHANNELS_ENDPOINT = "https://www.googleapis.com/youtube/v3/channels"
+THUMBNAIL_ENDPOINT = "https://www.googleapis.com/upload/youtube/v3/thumbnails/set"
 
 # youtube.upload is the narrowest scope that can post. youtube.readonly is here
 # only so the UI can name the channel a token belongs to, which is worth one
@@ -514,3 +515,31 @@ def _send(session: str, path: Path, size: int) -> str:
                     continue
                 raise YouTubeError(f"Upload connection failed: {error.reason}") from None
     raise YouTubeError("Upload ended without a video id")
+
+
+def set_thumbnail(video_id: str, image: Path) -> None:
+    """Attach a custom thumbnail to a video.
+
+    Expected to be refused on plenty of channels, and the caller should treat
+    that as cosmetic: custom thumbnails need a phone-verified channel, Shorts
+    thumbnails additionally need Partner Programme membership, and YouTube's
+    July 2026 rollout describes Shorts thumbnails as a Studio feature, so the
+    API may decline them outright. The video is already up either way.
+    """
+    query = urllib.parse.urlencode({"videoId": video_id})
+    request = urllib.request.Request(
+        f"{THUMBNAIL_ENDPOINT}?{query}",
+        data=image.read_bytes(),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {access_token()}",
+            "Content-Type": "image/jpeg",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120):
+            return
+    except urllib.error.HTTPError as error:
+        raise YouTubeError(_explain(error)) from None
+    except urllib.error.URLError as error:
+        raise YouTubeError(f"Could not reach YouTube: {error.reason}") from None

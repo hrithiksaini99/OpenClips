@@ -77,6 +77,7 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
             face_track=request.face_track,
             use_llm=request.use_llm,
             transcript_path=Path(request.transcript) if request.transcript else None,
+            delete_source=publisher.load().storage.delete_source_after_render,
         )
         _running.pop(job_id, None)
         # Writing a post calls the model once per clip, so it happens here on
@@ -300,6 +301,8 @@ def youtube_disconnect() -> dict[str, str]:
 
 class ScheduleUpdate(BaseModel):
     enabled: bool | None = None
+    delete_source_after_render: bool | None = None
+    delete_clip_after_post: bool | None = None
     slots: list[str] | None = None
     privacy: str | None = None
     category_id: str | None = None
@@ -343,6 +346,18 @@ def put_schedule(update: ScheduleUpdate) -> dict[str, Any]:
     if "daily_limit" in changes:
         changes["daily_limit"] = max(1, min(int(changes["daily_limit"]), publisher.DAILY_CAP))
     return asdict(publisher.configure(changes))
+
+
+@api.get("/storage")
+def get_storage() -> dict[str, Any]:
+    usage = pipeline.disk_usage()
+    board = publisher.load()
+    return {
+        **usage,
+        "total": usage["media"] + usage["clips"],
+        "reclaimed": sum(entry.freed for entry in board.queue),
+        **asdict(board.storage),
+    }
 
 
 @api.get("/queue")
