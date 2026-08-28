@@ -19,8 +19,8 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, time as clock, timedelta
-from pathlib import Path
+from datetime import date, datetime, timedelta
+from datetime import time as clock
 
 from studio import pipeline, youtube
 from studio.metadata import PostWriter
@@ -217,7 +217,9 @@ def find(entry_id: str) -> Entry | None:
     return next((entry for entry in load().queue if entry.id == entry_id), None)
 
 
-def enqueue(job_id: str, clip_ids: list[str] | None = None, *, writer: PostWriter | None = None) -> list[Entry]:
+def enqueue(
+    job_id: str, clip_ids: list[str] | None = None, *, writer: PostWriter | None = None
+) -> list[Entry]:
     """Write posts for a job's clips and add them to the queue.
 
     Metadata is generated here rather than during rendering, so a post can be

@@ -37,7 +37,9 @@ def _font(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default(size)
 
 
-def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, limit: int) -> list[str]:
+def _wrap(
+    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, limit: int
+) -> list[str]:
     """Greedy wrap on width, measured rather than guessed from character count."""
     lines: list[str] = []
     current = ""

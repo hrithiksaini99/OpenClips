@@ -20,6 +20,7 @@ before reading it:
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -181,10 +182,8 @@ def save_client(payload: dict) -> dict[str, str]:
     block = read_client(payload)
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CLIENT_SECRET.write_text(json.dumps(payload, indent=2))
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(CLIENT_SECRET, 0o600)
-    except OSError:
-        pass
     return block
 
 
@@ -325,10 +324,9 @@ def _save(token: dict) -> None:
     TOKEN_FILE.write_text(json.dumps(token, indent=2))
     # The refresh token is a standing key to the channel; keep it away from
     # other accounts on the machine.
-    try:
+    # Windows ACLs do not map onto POSIX modes.
+    with contextlib.suppress(OSError):
         os.chmod(TOKEN_FILE, 0o600)
-    except OSError:
-        pass  # Windows ACLs do not map onto POSIX modes
 
 
 def _load() -> dict | None:
@@ -350,10 +348,9 @@ def disconnect() -> None:
     token = _load()
     TOKEN_FILE.unlink(missing_ok=True)
     if token and token.get("refresh_token"):
-        try:
+        # The local token is gone either way, which is what matters.
+        with contextlib.suppress(YouTubeError):
             _post_form(REVOKE_ENDPOINT, {"token": token["refresh_token"]})
-        except YouTubeError:
-            pass  # the local token is gone either way, which is what matters
 
 
 def access_token() -> str:
@@ -605,7 +602,6 @@ def recent_uploads(limit: int = 50) -> dict[str, str]:
         {"part": "snippet", "maxResults": min(limit, 50), "playlistId": playlist}
     )
     listing = _get(f"https://www.googleapis.com/youtube/v3/playlistItems?{query}")
-    found: dict[str, str] = {}
     stamped: dict[str, tuple[str, str]] = {}
     for item in listing.get("items", []):
         snippet = item.get("snippet", {})

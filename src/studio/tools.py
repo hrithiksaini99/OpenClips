@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import shutil
 import sys
-from functools import lru_cache
+from functools import cache
 from pathlib import Path
 
 # Checked before PATH so a project-local install always wins.
@@ -33,7 +33,7 @@ class MissingToolError(RuntimeError):
     """Raised when a required external binary cannot be located."""
 
 
-@lru_cache(maxsize=None)
+@cache
 def binary(name: str) -> str:
     """Return an absolute path to `name`, raising an actionable error if absent."""
     for directory in _EXTRA_DIRS:

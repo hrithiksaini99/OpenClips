@@ -37,7 +37,8 @@ class CropPlan:
             return str(self._left(self.keyframes[0][1]))
         expression = str(self._left(self.keyframes[-1][1]))
         for start, center in reversed(self.keyframes[:-1]):
-            expression = f"if(lt(t,{start + SEGMENT_SECONDS:.2f}),{self._left(center)},{expression})"
+            until = start + SEGMENT_SECONDS
+            expression = f"if(lt(t,{until:.2f}),{self._left(center)},{expression})"
         return expression
 
     def _left(self, center: int) -> int:
@@ -69,7 +70,9 @@ def _detect_centers(video: Path, start: float, duration: float) -> list[tuple[fl
             image = cv2.imread(str(frame_path), cv2.IMREAD_GRAYSCALE)
             if image is None:
                 continue
-            faces = cascade.detectMultiScale(image, scaleFactor=1.15, minNeighbors=6, minSize=(46, 46))
+            faces = cascade.detectMultiScale(
+                image, scaleFactor=1.15, minNeighbors=6, minSize=(46, 46)
+            )
             timestamp = index / SAMPLE_FPS
             if len(faces) == 0:
                 samples.append((timestamp, None))

@@ -17,17 +17,18 @@ import sys
 import tempfile
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from studio.captions import CaptionStyle
 from studio.llm import ClipRanker
-from studio.tools import binary
 from studio.render import render_clip
 from studio.select import ClipCandidate, find_clips
 from studio.thumbnail import build as build_thumbnail
+from studio.tools import binary
 from studio.transcript import Word, build_sentences, load_words
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -198,7 +199,10 @@ def video_title(url: str) -> str:
     """Look up a video's title so jobs are listed by episode, not by id."""
     try:
         completed = subprocess.run(
-            [binary("yt-dlp"), "--skip-download", "--print", "%(title)s", "--no-playlist", "--", url],
+            [
+                binary("yt-dlp"), "--skip-download", "--print", "%(title)s",
+                "--no-playlist", "--", url,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -489,7 +493,10 @@ def transcribe(
             f"Transcribing {duration / 60:.0f} min with {model_size} x {parallel}…",
         )
 
-        def run(index: int) -> tuple[int, list[dict[str, Any]]]:
+        # `model` is bound as a default rather than closed over: it is deleted
+        # below to release its memory, and a closure would quietly make that
+        # ordering load-bearing.
+        def run(index: int, model: Any = model) -> tuple[int, list[dict[str, Any]]]:
             begin, finish = bounds[index]
             segments, _info = model.transcribe(
                 str(audio),
@@ -603,7 +610,11 @@ def rank_candidates(
         hook("select", _stage_progress("select", 0.9), "Ranking locally (no LLM available)…")
         return sorted(pool[:limit], key=lambda candidate: candidate.start)
 
-    hook("select", _stage_progress("select", 0.5), f"Asking {ranker.model} to pick the best {limit}…")
+    hook(
+        "select",
+        _stage_progress("select", 0.5),
+        f"Asking {ranker.model} to pick the best {limit}…",
+    )
     rankings = {rank.index: rank for rank in ranker.rank([c.text for c in pool])}
     if not rankings:
         return sorted(pool[:limit], key=lambda candidate: candidate.start)

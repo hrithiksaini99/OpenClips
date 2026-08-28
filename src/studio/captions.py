@@ -177,4 +177,6 @@ def render_caption_track(
                 break
         image.save(directory / f"cap-{frame:05d}.png")
 
-    return CaptionTrack(directory=directory, fps=fps, width=width, height=height, frames=total_frames)
+    return CaptionTrack(
+        directory=directory, fps=fps, width=width, height=height, frames=total_frames
+    )
