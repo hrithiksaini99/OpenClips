@@ -49,3 +49,22 @@ def test_settings_reject_invalid_worker_concurrency(
 
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+def test_stage_limit_can_equal_worker_concurrency() -> None:
+    settings = Settings(
+        _env_file=None,
+        worker_concurrency=2,
+        max_concurrent_renders=2,
+    )
+
+    assert settings.max_concurrent_renders == 2
+
+
+def test_stage_limit_cannot_exceed_worker_concurrency() -> None:
+    with pytest.raises(ValidationError, match="max_concurrent_renders"):
+        Settings(
+            _env_file=None,
+            worker_concurrency=2,
+            max_concurrent_renders=3,
+        )

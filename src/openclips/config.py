@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +21,8 @@ class Settings(BaseSettings):
     model_cache_root: Path = Path("/root/.cache/huggingface/hub")
     max_upload_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
     worker_concurrency: int = Field(default=2, ge=1)
+    max_concurrent_transcriptions: int = Field(default=1, ge=1)
+    max_concurrent_renders: int = Field(default=1, ge=1)
     outbox_batch_size: int = Field(default=50, ge=1, le=1000)
     outbox_backoff_cap_seconds: int = Field(default=300, ge=1)
     transcription_model_size: str = "base"
@@ -38,3 +41,13 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = Field(default=8000, ge=1)
     log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def _stage_limits_fit_within_worker_concurrency(self) -> Self:
+        for field_name in ("max_concurrent_transcriptions", "max_concurrent_renders"):
+            if getattr(self, field_name) > self.worker_concurrency:
+                raise ValueError(
+                    f"{field_name} ({getattr(self, field_name)}) must not exceed "
+                    f"worker_concurrency ({self.worker_concurrency})"
+                )
+        return self

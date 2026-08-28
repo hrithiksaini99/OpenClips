@@ -1,15 +1,17 @@
 """Worker process: claims queued jobs and dispatches them to registered handlers."""
 
 import logging
-import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
+from threading import BoundedSemaphore, Event, Thread
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from openclips.application.clipping import SELECT_CLIPS_JOB_KIND, ClipSelectionCoordinator
+from openclips.application.concurrency import StageLimiter
 from openclips.application.dispatch import OutboxRelay
 from openclips.application.health import make_database_probe
 from openclips.application.pipeline import KNOWN_JOB_KINDS
@@ -26,7 +28,7 @@ from openclips.domain.selection import SelectionBounds
 from openclips.infrastructure.db import make_engine
 from openclips.infrastructure.media_storage import MediaStorage
 from openclips.infrastructure.models import JobRecord
-from openclips.infrastructure.queue import InMemoryJobQueue, RedisJobQueue
+from openclips.infrastructure.queue import InMemoryJobQueue, QueueReceipt, RedisJobQueue
 from openclips.infrastructure.repositories import (
     ClipRepository,
     JobRepository,
@@ -56,8 +58,13 @@ def _failure_message(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"
 
 
-def make_transcribe_handler(provider: FasterWhisperProvider, storage: MediaStorage) -> Handler:
+def make_transcribe_handler(
+    provider: FasterWhisperProvider,
+    storage: MediaStorage,
+    stage_limiter: StageLimiter | None = None,
+) -> Handler:
     """Build a handler that executes transcription jobs inside a worker session."""
+    limiter = stage_limiter or StageLimiter({})
 
     def handle(session: Session, job: JobRecord) -> None:
         coordinator = TranscriptionCoordinator(
@@ -67,7 +74,8 @@ def make_transcribe_handler(provider: FasterWhisperProvider, storage: MediaStora
             provider=provider,
             storage=storage,
         )
-        coordinator.run(job)
+        with limiter.limit(TRANSCRIBE_JOB_KIND):
+            coordinator.run(job)
 
     return handle
 
@@ -95,8 +103,10 @@ def make_render_handler(
     style: CaptionStyle,
     width: int,
     height: int,
+    stage_limiter: StageLimiter | None = None,
 ) -> Handler:
     """Build a handler that executes render jobs inside a worker session."""
+    limiter = stage_limiter or StageLimiter({})
 
     def handle(session: Session, job: JobRecord) -> None:
         coordinator = RenderCoordinator(
@@ -110,7 +120,8 @@ def make_render_handler(
             width=width,
             height=height,
         )
-        coordinator.run(job)
+        with limiter.limit(RENDER_CLIP_JOB_KIND):
+            coordinator.run(job)
 
     return handle
 
@@ -143,9 +154,15 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
         min_duration_seconds=settings.min_clip_seconds,
         max_duration_seconds=settings.max_clip_seconds,
     )
+    stage_limiter = StageLimiter(
+        {
+            TRANSCRIBE_JOB_KIND: settings.max_concurrent_transcriptions,
+            RENDER_CLIP_JOB_KIND: settings.max_concurrent_renders,
+        }
+    )
     handlers = {
         INGEST_YOUTUBE_JOB_KIND: make_youtube_ingest_handler(YtDlpDownloader(), storage),
-        TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage),
+        TRANSCRIBE_JOB_KIND: make_transcribe_handler(provider, storage, stage_limiter),
         SELECT_CLIPS_JOB_KIND: make_select_clips_handler(HeuristicClipRefiner(), bounds),
         RENDER_CLIP_JOB_KIND: make_render_handler(
             FFmpegRenderer(),
@@ -153,6 +170,7 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
             get_template(settings.caption_template),
             settings.render_width,
             settings.render_height,
+            stage_limiter,
         ),
     }
     handlers.update(
@@ -301,6 +319,73 @@ def _fail_job(session_factory: sessionmaker[Session], job_id: UUID, message: str
         session.commit()
 
 
+def _claim_next(
+    queue: JobQueue, queue_names: tuple[str, ...], claim_timeout_seconds: float
+) -> QueueReceipt | None:
+    for queue_name in queue_names:
+        receipt = queue.claim(queue_name, timeout_seconds=claim_timeout_seconds)
+        if receipt is not None:
+            return receipt
+    return None
+
+
+def _run_claimed_job(
+    receipt: QueueReceipt,
+    session_factory: sessionmaker[Session],
+    handlers: dict[str, Handler],
+    queue: JobQueue,
+) -> None:
+    """Process one claimed payload and acknowledge it as a single unit of work."""
+    try:
+        _process_payload(UUID(receipt.payload), session_factory, handlers)
+    finally:
+        queue.ack(receipt)
+
+
+def run_claim_loop(
+    *,
+    session_factory: sessionmaker[Session],
+    handlers: dict[str, Handler],
+    queue: JobQueue,
+    pool: ThreadPoolExecutor,
+    permits: BoundedSemaphore,
+    stop_event: Event,
+    queue_names: tuple[str, ...] = QUEUE_NAMES,
+    claim_timeout_seconds: float = 1.0,
+    idle_sleep_seconds: float = 0.05,
+) -> None:
+    """Claim jobs under a permit budget and dispatch each to the shared pool.
+
+    A permit is acquired before every ``queue.claim``; ``_process_payload`` plus the
+    matching ``queue.ack`` run together on ``pool`` as one unit of work, and the permit
+    is released only when that future completes. Setting ``stop_event`` (or a
+    ``KeyboardInterrupt``) stops new claims; in-flight futures are awaited before return.
+    """
+    futures: list[Future[None]] = []
+    try:
+        while not stop_event.is_set():
+            permits.acquire()
+            if stop_event.is_set():
+                permits.release()
+                break
+            receipt = _claim_next(queue, queue_names, claim_timeout_seconds)
+            if receipt is None:
+                permits.release()
+                if stop_event.wait(idle_sleep_seconds):
+                    break
+                continue
+            future = pool.submit(
+                _run_claimed_job, receipt, session_factory, handlers, queue
+            )
+            future.add_done_callback(lambda _future: permits.release())
+            futures.append(future)
+            futures = [pending for pending in futures if not pending.done()]
+    except KeyboardInterrupt:
+        stop_event.set()
+    finally:
+        wait(futures)
+
+
 def run() -> None:
     """Run the OpenClips worker until interrupted; used by the console script."""
     settings = Settings()
@@ -330,11 +415,29 @@ def run() -> None:
         settings.worker_concurrency,
         ",".join(QUEUE_NAMES),
     )
-    try:
-        while True:
+    stop_event = Event()
+    pool = ThreadPoolExecutor(max_workers=settings.worker_concurrency)
+    permits = BoundedSemaphore(settings.worker_concurrency)
+
+    def _pump_relay() -> None:
+        while not stop_event.wait(0.5):
             relay.dispatch_once()
-            handled = process_once(session_factory=session_factory, handlers=handlers, queue=queue)
-            if not handled:
-                time.sleep(0.5)
+
+    relay_thread = Thread(target=_pump_relay, name="outbox-relay", daemon=True)
+    relay_thread.start()
+    try:
+        run_claim_loop(
+            session_factory=session_factory,
+            handlers=handlers,
+            queue=queue,
+            pool=pool,
+            permits=permits,
+            stop_event=stop_event,
+        )
     except KeyboardInterrupt:
+        stop_event.set()
+    finally:
+        stop_event.set()
+        pool.shutdown(wait=True)
+        relay_thread.join(timeout=5)
         logger.info("OpenClips worker stopped")
