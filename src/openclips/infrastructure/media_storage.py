@@ -115,7 +115,9 @@ class MediaStorage:
 
             try:
                 os.replace(temporary_path, name, dst_dir_fd=parent_fd)
-            except OSError:
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
                 self.write_stream(key, read_file_chunks(temporary_path))
                 temporary_path.unlink(missing_ok=True)
         finally:

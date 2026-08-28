@@ -372,6 +372,31 @@ def test_promote_file_cross_filesystem_fallback_preserves_behavior(
     assert not temporary.exists()
 
 
+def test_promote_file_does_not_mask_non_cross_filesystem_replace_errors(
+    storage: MediaStorage, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    temporary = tmp_path / "download.partial"
+    temporary.write_bytes(CONTENT)
+    real_replace = os.replace
+    replace_calls = 0
+
+    def permission_denied_once(*args: object, **kwargs: object) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 1:
+            raise PermissionError(errno.EACCES, "permission denied")
+        real_replace(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(media_storage.os, "replace", permission_denied_once)
+
+    with pytest.raises(PermissionError):
+        storage.promote_file("safe/payload.bin", temporary)
+
+    assert temporary.read_bytes() == CONTENT
+    assert not storage.resolve("safe/payload.bin").exists()
+    assert replace_calls == 1
+
+
 def test_delete_removes_contained_file_and_reports(storage: MediaStorage) -> None:
     stored = storage.write_stream("local/to-delete.mp4", [CONTENT])
 
