@@ -239,6 +239,7 @@
   .qtitle[contenteditable]:hover { background: var(--muted); }
   .qtitle[contenteditable]:focus { outline: 2px solid var(--ring); background: var(--muted); }
   .qmeta { font-size: 12px; color: var(--muted-fg); margin-top: 3px; overflow-wrap: anywhere; }
+  .qnote { font-size: 12px; color: var(--accent); margin-top: 3px; overflow-wrap: anywhere; }
   .qerr { font-size: 12px; color: var(--destructive); margin-top: 3px; overflow-wrap: anywhere; }
   .qacts { display: flex; gap: 6px; align-items: center; }
   .pill { font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 999px;
@@ -767,7 +768,8 @@ function entryRow(entry) {
         ${entry.status === 'posted' ? '' : 'contenteditable="plaintext-only" spellcheck="false"'}
       >${esc(entry.title)}</div>
       <div class="qmeta">${esc((entry.hashtags || []).slice(0, 4).join(' '))}${link}</div>
-      ${entry.error ? `<div class="qerr">${esc(entry.error)}</div>` : ''}
+      ${entry.error
+        ? `<div class="${entry.status === 'posted' ? 'qnote' : 'qerr'}">${esc(entry.error)}</div>` : ''}
     </div>
     <div class="qacts">
       <span class="pill ${klass}">${esc(pill)}</span>

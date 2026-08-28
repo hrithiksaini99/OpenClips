@@ -100,8 +100,14 @@ _opener = urllib.request.build_opener(_NoRedirect)
 _pending: dict[str, str] = {}
 
 
-def _explain(error: urllib.error.HTTPError) -> str:
-    """Turn a Google error body into something a person can act on."""
+def _explain(error: urllib.error.HTTPError, *, context: str = "") -> str:
+    """Turn a Google error body into something a person can act on.
+
+    `context` matters: Google's 403 for "this channel may not set custom
+    thumbnails" says the user cannot "upload and set custom video thumbnails",
+    and matching the word "upload" in it produced a message telling people their
+    account could not upload at all — while the video sat happily on YouTube.
+    """
     try:
         payload = json.loads(error.read())
     except Exception:
@@ -117,6 +123,12 @@ def _explain(error: urllib.error.HTTPError) -> str:
         return "That Google account has no YouTube channel. Create one, then reconnect."
     if "quotaExceeded" in reasons:
         return "This project's daily upload quota is used up; it resets at midnight Pacific."
+    if error.code in (401, 403) and context == "thumbnail":
+        return (
+            "this channel cannot set custom thumbnails yet. Verify your phone "
+            "number at youtube.com/verify to turn them on; on Shorts they also "
+            "need YouTube Partner Programme membership."
+        )
     if "forbidden" in reasons and "upload" in detail.get("message", "").lower():
         return "This account is not allowed to upload. Check the channel is in good standing."
     return f"{detail.get('message') or 'Request rejected'} (HTTP {error.code})"
@@ -540,6 +552,6 @@ def set_thumbnail(video_id: str, image: Path) -> None:
         with urllib.request.urlopen(request, timeout=120):
             return
     except urllib.error.HTTPError as error:
-        raise YouTubeError(_explain(error)) from None
+        raise YouTubeError(_explain(error, context="thumbnail")) from None
     except urllib.error.URLError as error:
         raise YouTubeError(f"Could not reach YouTube: {error.reason}") from None
