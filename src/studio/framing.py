@@ -49,8 +49,10 @@ def _detect_centers(video: Path, start: float, duration: float) -> list[tuple[fl
     """Return (relative time, face centre x in sample pixels) for sampled frames."""
     import cv2  # imported lazily so the module stays importable without OpenCV
 
-    cascade = cv2.CascadeClassifier(
-        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    # cv2's stubs cover neither CascadeClassifier nor cv2.data, both of which
+    # are real at runtime.
+    cascade = cv2.CascadeClassifier(  # type: ignore[attr-defined]
+        cv2.data.haarcascades + "haarcascade_frontalface_default.xml"  # type: ignore[attr-defined]
     )
     samples: list[tuple[float, int | None]] = []
     with tempfile.TemporaryDirectory(prefix="openclips-frames-") as temporary:

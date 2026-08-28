@@ -21,6 +21,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from datetime import time as clock
+from typing import Any
 
 from studio import pipeline, youtube
 from studio.metadata import PostWriter
@@ -102,7 +103,7 @@ class Board:
     paused_until: float = 0.0  # set when the channel's own upload cap is hit
 
 
-def _only_known(payload: dict, cls: type) -> dict:
+def _only_known(payload: dict, cls: Any) -> dict:
     """Drop keys the dataclass does not have.
 
     Job state uses a strict `**payload`, which means an older file breaks the

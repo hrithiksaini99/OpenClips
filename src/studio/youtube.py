@@ -99,7 +99,15 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
     devices urllib treats it as one and the upload dies.
     """
 
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+    def redirect_request(  # noqa: D102
+        self,
+        req: urllib.request.Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> None:
         return None
 
 

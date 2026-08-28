@@ -15,6 +15,7 @@ from __future__ import annotations
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -30,16 +31,14 @@ MAX_BYTES = 2 * 1024 * 1024
 _SHADE = (0, 0, 0, 168)
 
 
-def _font(size: int) -> ImageFont.FreeTypeFont:
+def _font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for candidate in _FONT_CANDIDATES:
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, size)
     return ImageFont.load_default(size)
 
 
-def _wrap(
-    draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, limit: int
-) -> list[str]:
+def _wrap(draw: ImageDraw.ImageDraw, text: str, font: Any, limit: int) -> list[str]:
     """Greedy wrap on width, measured rather than guessed from character count."""
     lines: list[str] = []
     current = ""
@@ -61,7 +60,7 @@ def _cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     scale = max(target_w / image.width, target_h / image.height)
     scaled = image.resize(
         (max(1, round(image.width * scale)), max(1, round(image.height * scale))),
-        Image.LANCZOS,
+        Image.Resampling.LANCZOS,
     )
     left = (scaled.width - target_w) // 2
     top = (scaled.height - target_h) // 2
@@ -80,7 +79,8 @@ def _backdrop(frame: Image.Image) -> Image.Image:
     canvas = _cover(frame, (WIDTH, HEIGHT)).filter(ImageFilter.GaussianBlur(28))
     canvas = Image.blend(canvas, Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0)), 0.45)
     inner_w = max(1, round(HEIGHT * frame.width / frame.height))
-    canvas.paste(frame.resize((inner_w, HEIGHT), Image.LANCZOS), ((WIDTH - inner_w) // 2, 0))
+    inner = frame.resize((inner_w, HEIGHT), Image.Resampling.LANCZOS)
+    canvas.paste(inner, ((WIDTH - inner_w) // 2, 0))
     return canvas
 
 

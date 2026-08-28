@@ -525,8 +525,8 @@ def transcribe(
         collected: list[list[dict[str, Any]]] = [[] for _ in bounds]
         done = 0
         with ThreadPoolExecutor(max_workers=parallel) as pool:
-            for index, words in pool.map(run, range(len(bounds))):
-                collected[index] = words
+            for index, chunk_words in pool.map(run, range(len(bounds))):
+                collected[index] = chunk_words
                 done += 1
                 hook(
                     "transcribe",
@@ -566,13 +566,16 @@ def _render_one(payload: dict[str, Any]) -> dict[str, Any]:
     )
     # Built from the original episode rather than the render: the render has
     # captions burned in, which read as clutter behind the thumbnail's own text.
-    poster = Path(payload["destination"]).with_name(Path(payload["destination"]).stem + "-yt.jpg")
+    poster_path = Path(payload["destination"]).with_name(
+        Path(payload["destination"]).stem + "-yt.jpg"
+    )
     if not payload.get("make_poster"):
         return {"id": payload["id"], "thumbnail": thumbnail.name, "poster": ""}
+    poster: Path | None = poster_path
     try:
         build_thumbnail(
             Path(payload["source"]),
-            poster,
+            poster_path,
             payload.get("title", ""),
             at=payload["start"] + min(4.0, (payload["end"] - payload["start"]) / 3),
         )
@@ -707,17 +710,17 @@ def run_job(
         report("select", _stage_progress("select", 0.3), "Finding the strongest moments…")
         sentences = build_sentences(words)
         # Shortlist wider than needed so the model has something to choose from.
-        pool = find_clips(sentences, max_clips=min(max_clips * 3, 45))
-        if not pool:
+        shortlist = find_clips(sentences, max_clips=min(max_clips * 3, 45))
+        if not shortlist:
             raise RuntimeError("No clip-worthy segments found")
-        candidates = rank_candidates(pool, max_clips, report, use_llm=use_llm)
+        candidates = rank_candidates(shortlist, max_clips, report, use_llm=use_llm)
 
         if pending_video is not None:
             report("render", _stage_progress("render", 0.0), "Waiting for the video download…")
             pending_video.result()
             downloads.shutdown(wait=True)
         report("render", _stage_progress("render", 0.0), f"Rendering {len(candidates)} clips…")
-        payloads = []
+        payloads: list[dict[str, Any]] = []
         records: dict[str, ClipRecord] = {}
         for index, candidate in enumerate(candidates, start=1):
             clip_id = f"{index:02d}-{_slug(candidate.title)}"
@@ -760,8 +763,8 @@ def run_job(
             _stage_progress("render", 0.0),
             f"Rendering {len(candidates)} clips ({render_workers} at a time)…",
         )
-        with ProcessPoolExecutor(max_workers=render_workers) as pool:
-            futures = [pool.submit(_render_one, payload) for payload in payloads]
+        with ProcessPoolExecutor(max_workers=render_workers) as workers_pool:
+            futures = [workers_pool.submit(_render_one, payload) for payload in payloads]
             for future in as_completed(futures):
                 result = future.result()
                 records[result["id"]].thumbnail = result["thumbnail"]

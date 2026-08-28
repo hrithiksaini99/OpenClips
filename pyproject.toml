@@ -66,9 +66,19 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 mypy_path = "src"
-packages = ["openclips"]
+packages = ["openclips", "studio"]
 strict = true
 plugins = ["sqlalchemy.ext.mypy.plugin"]
+
+# The studio pipeline is checked too, minus two classes of finding that are
+# noise rather than signal here: it talks to JSON APIs and to libraries whose
+# stubs are loose (PIL, cv2, faster-whisper), so almost every `no-any-return`
+# is a parsed payload and almost every `type-arg` is a JSON dict.
+[[tool.mypy.overrides]]
+module = "studio.*"
+warn_return_any = false
+disallow_any_generics = false
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["alembic.*", "redis.*", "faster_whisper.*"]

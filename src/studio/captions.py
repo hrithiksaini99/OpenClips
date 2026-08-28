@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -52,7 +53,7 @@ class CaptionTrack:
     frames: int
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont:
+def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for candidate in _FONT_CANDIDATES:
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, size)
@@ -63,9 +64,10 @@ def _lines(words: list[Word], per_line: int) -> list[list[Word]]:
     return [words[index : index + per_line] for index in range(0, len(words), per_line)]
 
 
-def _measure(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> tuple[int, int]:
+def _measure(draw: ImageDraw.ImageDraw, text: str, font: Any) -> tuple[int, int]:
     box = draw.textbbox((0, 0), text, font=font, stroke_width=0)
-    return box[2] - box[0], box[3] - box[1]
+    # textbbox reports floats; layout works in whole pixels.
+    return int(box[2] - box[0]), int(box[3] - box[1])
 
 
 def _render_state(

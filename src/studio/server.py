@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 import threading
 import zipfile
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime
@@ -30,11 +30,9 @@ _SLOT = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
-    # The scheduler only posts when it is armed in the UI, which it never is by
-    # default; starting the thread here just means an armed schedule survives a
-    # restart without anyone having to press anything.
-    # Anything left "uploading" belongs to a process that is no longer running.
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Anything left "uploading" belongs to a process that is no longer running,
+    # so it is returned to the queue (reconciled against YouTube first).
     recovered = publisher.recover_stalled()
     if recovered:
         publisher.note_error(f"{recovered} interrupted upload(s) returned to the queue")
@@ -166,7 +164,9 @@ def _zip_stream(members: list[tuple[str, Path]]) -> Iterator[bytes]:
     MP4 is already compressed, so deflating it costs CPU for almost no saving.
     """
     buffer = _ZipBuffer()
-    archive = zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED, allowZip64=True)
+    # _ZipBuffer deliberately implements only part of the file protocol — no
+    # seek — which is the whole point, and more than zipfile needs to write.
+    archive = zipfile.ZipFile(buffer, "w", zipfile.ZIP_STORED, allowZip64=True)  # type: ignore[call-overload]
     for name, path in members:
         with archive.open(name, "w") as entry, path.open("rb") as source:
             while block := source.read(1 << 20):
