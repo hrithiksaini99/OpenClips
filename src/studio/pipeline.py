@@ -105,7 +105,25 @@ _URL_LIKE = re.compile(r"^(?:https?://)?(?:[\w-]+\.)*(?:youtube\.com|youtu\.be)/
 # Channel, user and playlist locators expand to every video they contain, which
 # yt-dlp will happily download for hours; they must be resolved to one episode.
 _COLLECTION_MARKERS = ("/@", "/channel/", "/c/", "/user/", "/playlist", "/videos", "/streams")
-_PROGRESS = re.compile(r"\[download\]\s+([\d.]+)%")
+_PROGRESS = re.compile(
+    r"\[download\]\s+([\d.]+)%(?:\s+of\s+~?\s*(\S+))?(?:\s+at\s+(\S+))?(?:\s+ETA\s+(\S+))?"
+)
+
+# Stage boundaries on the overall progress bar. Downloading a multi-gigabyte
+# episode and transcribing it are the long stages, so they own most of the bar;
+# previously the whole download moved it from 5% to 11% and looked frozen.
+STAGE_SPAN = {
+    "resolve": (0.00, 0.02),
+    "download": (0.02, 0.32),
+    "transcribe": (0.32, 0.80),
+    "select": (0.80, 0.83),
+    "render": (0.83, 1.00),
+}
+
+
+def _stage_progress(stage: str, share: float) -> float:
+    low, high = STAGE_SPAN[stage]
+    return low + (high - low) * max(0.0, min(share, 1.0))
 
 
 def normalize_source(raw: str) -> str:
@@ -131,7 +149,7 @@ def is_collection(url: str) -> bool:
 
 def resolve_episode(url: str, hook: ProgressHook) -> str:
     """Expand a channel/playlist URL to its most recent video URL."""
-    hook("resolve", 0.02, "Reading channel for the latest episode…")
+    hook("resolve", _stage_progress("resolve", 0.2), "Reading channel for the latest episode…")
     completed = subprocess.run(
         [
             binary("yt-dlp"), "--flat-playlist", "--playlist-end", "1",
@@ -146,7 +164,7 @@ def resolve_episode(url: str, hook: ProgressHook) -> str:
     if not line:
         raise RuntimeError(f"No videos found at {url}")
     video_id, _, title = line[0].partition("\t")
-    hook("resolve", 0.04, f"Latest episode: {title[:70]}")
+    hook("resolve", _stage_progress("resolve", 1.0), f"Latest episode: {title[:70]}")
     return f"https://www.youtube.com/watch?v={video_id}"
 
 
@@ -173,6 +191,11 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
             binary("yt-dlp"), "--newline", "--no-playlist",
             "-f", "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]",
             "--merge-output-format", "mp4",
+            # YouTube throttles a single DASH connection hard (~0.6 MB/s on a
+            # 2 GB episode); fetching fragments concurrently is several times
+            # faster and is the difference between minutes and an hour.
+            "--concurrent-fragments", "8",
+            "--retries", "10", "--fragment-retries", "10",
             # yt-dlp shells out to FFmpeg to merge the streams, and it searches
             # PATH, which does not include Homebrew in every launch context.
             "--ffmpeg-location", binary("ffmpeg"),
@@ -190,7 +213,15 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
         match = _PROGRESS.search(line)
         if match:
             share = float(match.group(1)) / 100.0
-            hook("download", 0.05 + share * 0.06, f"Downloading source… {share * 100:.0f}%")
+            size, speed, eta = match.group(2), match.group(3), match.group(4)
+            detail = f"{share * 100:.0f}%"
+            if size:
+                detail += f" of {size}"
+            if speed:
+                detail += f" at {speed}"
+            if eta:
+                detail += f" · ETA {eta}"
+            hook("download", _stage_progress("download", share), f"Downloading {detail}")
     if process.wait() != 0:
         raise RuntimeError("yt-dlp failed:\n" + "\n".join(tail))
     return destination
@@ -261,7 +292,7 @@ def transcribe(
     video: Path, model_size: str, hook: ProgressHook, workers: int = 4
 ) -> list[Word]:
     """Transcribe by splitting the audio and running slices in parallel processes."""
-    hook("transcribe", 0.12, "Extracting audio…")
+    hook("transcribe", _stage_progress("transcribe", 0.02), "Extracting audio…")
     with tempfile.TemporaryDirectory(prefix="openclips-audio-") as temporary:
         audio = Path(temporary) / "audio.wav"
         duration = _extract_audio(video, audio)
@@ -275,7 +306,7 @@ def transcribe(
         parallel = max(1, min(workers, _MODEL_WORKER_CAP.get(model_size, 4), len(bounds)))
         hook(
             "transcribe",
-            0.15,
+            _stage_progress("transcribe", 0.05),
             f"Transcribing {duration / 60:.0f} min with {model_size} × {parallel} workers…",
         )
 
@@ -296,7 +327,7 @@ def transcribe(
                 done += 1
                 hook(
                     "transcribe",
-                    0.15 + 0.45 * (done / len(payloads)),
+                    _stage_progress("transcribe", 0.05 + 0.95 * (done / len(payloads))),
                     f"Transcribed {done}/{len(payloads)} segments",
                 )
 
@@ -367,19 +398,19 @@ def run_job(
         state.title = state.title or video.stem
 
         if transcript_path is not None:
-            report("transcribe", 0.55, "Loading existing transcript…")
+            report("transcribe", _stage_progress("transcribe", 1.0), "Loading existing transcript…")
             words = load_words(transcript_path)
         else:
             words = transcribe(video, model_size, report, workers=workers)
         if not words:
             raise RuntimeError("Transcription produced no words")
 
-        report("select", 0.62, "Finding the strongest moments…")
+        report("select", _stage_progress("select", 0.5), "Finding the strongest moments…")
         candidates = find_clips(build_sentences(words), max_clips=max_clips)
         if not candidates:
             raise RuntimeError("No clip-worthy segments found")
 
-        report("render", 0.68, f"Rendering {len(candidates)} clips in parallel…")
+        report("render", _stage_progress("render", 0.0), f"Rendering {len(candidates)} clips in parallel…")
         payloads = []
         records: dict[str, ClipRecord] = {}
         for index, candidate in enumerate(candidates, start=1):
@@ -422,7 +453,7 @@ def run_job(
                 done += 1
                 report(
                     "render",
-                    0.68 + 0.3 * (done / len(payloads)),
+                    _stage_progress("render", done / len(payloads)),
                     f"Rendered {done}/{len(payloads)} clips",
                 )
 
