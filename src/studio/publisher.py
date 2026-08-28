@@ -289,6 +289,33 @@ def configure(changes: dict) -> Schedule:
         return board.schedule
 
 
+def claim_now(entry_id: str) -> Entry:
+    """Reserve one entry to be posted immediately, outside the schedule.
+
+    Marking it "uploading" inside the lock is what stops a tick that lands
+    mid-click from picking the same entry up and posting it twice.
+    """
+    if not youtube.connected():
+        raise youtube.NotConnected("Connect a YouTube account first")
+    with _lock:
+        board = load()
+        if posted_today(board.queue, datetime.now()) >= DAILY_CAP:
+            raise RuntimeError(f"YouTube's cap of {DAILY_CAP} uploads a day is used up")
+        for entry in board.queue:
+            if entry.id != entry_id:
+                continue
+            if entry.status in ("uploading", "posted"):
+                raise RuntimeError(f"That clip is already {entry.status}")
+            # A manual publish is an explicit decision, so a parked entry gets a
+            # clean slate rather than being refused for its earlier failures.
+            entry.status = "uploading"
+            entry.error = ""
+            entry.attempts = 0
+            save(board)
+            return entry
+    raise LookupError("Entry not found")
+
+
 def _finish(entry_id: str, *, video_id: str = "", error: str = "") -> None:
     with _lock:
         board = load()
@@ -379,6 +406,10 @@ class Scheduler:
             board.claimed.append(slot)
             save(board)
             return entry.id
+
+    def post(self, entry_id: str) -> None:
+        """Upload one already-claimed entry. Used by the tick and by Publish now."""
+        self._post(entry_id)
 
     def _post(self, entry_id: str) -> None:
         entry = find(entry_id)

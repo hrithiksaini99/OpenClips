@@ -388,6 +388,22 @@ def delete_queue(entry_id: str) -> dict[str, str]:
     return {"status": "removed"}
 
 
+@api.post("/queue/{entry_id}/publish")
+def publish_now(entry_id: str, background: BackgroundTasks) -> dict[str, Any]:
+    """Post one clip straight away, without waiting for its slot."""
+    try:
+        entry = publisher.claim_now(entry_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Entry not found") from None
+    except youtube.NotConnected as error:
+        raise HTTPException(status_code=428, detail=str(error)) from None
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    # The upload takes as long as it takes; the queue shows it as uploading.
+    background.add_task(publisher.scheduler.post, entry_id)
+    return asdict(entry)
+
+
 @api.post("/queue/{entry_id}/retry")
 def retry_queue(entry_id: str) -> dict[str, Any]:
     entry = publisher.retry(entry_id)

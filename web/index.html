@@ -192,6 +192,26 @@
   .slot button { background: none; border: none; color: var(--muted-fg); cursor: pointer;
                  padding: 3px 6px; border-radius: 5px; line-height: 1; font-size: 15px; }
   .slot button:hover { color: var(--destructive); }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 11px; }
+  .preset { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 7px;
+            background: transparent; border: 1px solid var(--border); color: var(--muted-fg);
+            cursor: pointer; transition: color var(--t), border-color var(--t); }
+  .preset:hover { color: var(--fg); border-color: var(--border-strong); }
+  .hours { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; }
+  .hour { aspect-ratio: 1; border-radius: 6px; border: 1px solid var(--border);
+          background: var(--bg); color: var(--muted-fg); font: inherit; font-size: 11px;
+          display: grid; place-items: center; cursor: pointer; padding: 0;
+          font-variant-numeric: tabular-nums;
+          transition: background var(--t), border-color var(--t), color var(--t); }
+  .hour:hover { border-color: var(--border-strong); color: var(--fg); }
+  .hour[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent);
+                               border-color: rgba(200,155,74,.55); font-weight: 600; }
+  .hour-legend { display: flex; justify-content: space-between; font-size: 10.5px;
+                 color: var(--muted-fg); margin-top: 5px; letter-spacing: .03em; }
+  .slot-summary { font-size: 12.5px; color: var(--muted-fg); margin-top: 10px;
+                  font-variant-numeric: tabular-nums; }
+  .slot-summary b { color: var(--fg); font-weight: 500; }
+
   .qrow { display: grid; grid-template-columns: 44px minmax(0,1fr) max-content; gap: 13px;
           align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
   .qrow:last-child { border-bottom: none; padding-bottom: 0; }
@@ -452,6 +472,17 @@ $('source').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').
 // ---------------------------------------------------------------- publishing
 let ytStatus = null, board = null;
 const PRIVACY = ['private', 'unlisted', 'public'];
+const PRESETS = [
+  { label: 'Twice a day', hours: [9, 19] },
+  { label: '3 a day', hours: [9, 15, 20] },
+  { label: '5 a day', hours: [8, 11, 14, 17, 20] },
+  { label: 'Evenings', hours: [17, 19, 21] },
+];
+const asSlot = (hour) => String(hour).padStart(2, '0') + ':00';
+const hourLabel = (hour) => {
+  const suffix = hour < 12 ? 'am' : 'pm';
+  return `${hour % 12 || 12}${suffix}`;
+};
 
 function showPubError(message) {
   const slot = $('pubSummary');
@@ -586,6 +617,8 @@ function renderAccount() {
 function renderSchedule() {
   const schedule = (board && board.schedule) || {};
   const slots = schedule.slots || [];
+  // The grid works in whole hours; a stored 09:30 lights up the 9 cell.
+  const hours = new Set(slots.map((time) => parseInt(time.split(':')[0], 10)));
   const state = schedule.enabled
     ? `Armed · ${board.posted_today}/${board.daily_limit} posted today`
     : 'Not running';
@@ -597,13 +630,18 @@ function renderSchedule() {
     </div>
     <div class="rule"></div>
     <label>Post at</label>
-    <div class="slots" id="slots">
-      ${slots.map((time, index) => `<span class="slot">
-        <input type="time" value="${esc(time)}" data-slot="${index}" />
-        <button type="button" data-del="${index}" aria-label="Remove ${esc(time)}">&times;</button>
-      </span>`).join('')}
-      <button type="button" class="btn" id="addSlot" style="padding:6px 12px">+ Time</button>
+    <div class="presets">
+      ${PRESETS.map((preset, index) =>
+        `<button type="button" class="preset" data-preset="${index}">${esc(preset.label)}</button>`).join('')}
     </div>
+    <div class="hours" id="hours">
+      ${[...Array(24).keys()].map((hour) => `<button type="button" class="hour" data-hour="${hour}"
+        aria-pressed="${hours.has(hour)}" title="${hourLabel(hour)}">${hour}</button>`).join('')}
+    </div>
+    <div class="hour-legend"><span>midnight</span><span>noon</span><span>23:00</span></div>
+    <div class="slot-summary">${slots.length
+      ? `<b>${slots.length}</b> a day · ${slots.map((time) => hourLabel(+time.split(':')[0])).join(' · ')}`
+      : 'Pick at least one hour'}</div>
     <div class="rule"></div>
     <div style="display:flex;gap:12px;align-items:end">
       <div class="field" style="flex:1"><label for="privacy">Visibility</label>
@@ -623,22 +661,21 @@ function renderSchedule() {
   const save = (changes) => api('/api/schedule', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
   }).then(refreshPublishing).catch((error) => showPubError(error.message));
-  const times = () => [...$('slots').querySelectorAll('input[type=time]')]
-    .map((input) => input.value).filter(Boolean);
-
   $('armed').onchange = (event) => save({ enabled: event.target.checked });
   $('autoq').onchange = (event) => save({ auto_enqueue: event.target.checked });
   $('privacy').onchange = (event) => save({ privacy: event.target.value });
   $('perday').onchange = (event) => save({ daily_limit: +event.target.value });
-  $('addSlot').onclick = () => save({ slots: [...times(), '12:00'] });
-  $('slots').querySelectorAll('input[type=time]').forEach((input) => {
-    input.onchange = () => save({ slots: times() });
-  });
-  $('slots').querySelectorAll('[data-del]').forEach((button) => {
-    button.onclick = () => {
-      const rest = times().filter((_, index) => index !== +button.dataset.del);
-      save({ slots: rest.length ? rest : ['09:00'] });   // never leave it with none
+  $('hours').querySelectorAll('[data-hour]').forEach((cell) => {
+    cell.onclick = () => {
+      const hour = +cell.dataset.hour;
+      const next = new Set(hours);
+      next.has(hour) ? next.delete(hour) : next.add(hour);
+      if (!next.size) return;              // never leave the schedule with no times
+      save({ slots: [...next].sort((a, b) => a - b).map(asSlot) });
     };
+  });
+  $('schedCard').querySelectorAll('[data-preset]').forEach((button) => {
+    button.onclick = () => save({ slots: PRESETS[+button.dataset.preset].hours.map(asSlot) });
   });
 }
 
@@ -667,7 +704,8 @@ function entryRow(entry) {
     </div>
     <div class="qacts">
       <span class="pill ${klass}">${esc(pill)}</span>
-      ${entry.status === 'failed' ? `<button class="icon-btn" data-retry="${entry.id}">Retry</button>` : ''}
+      ${['pending', 'failed'].includes(entry.status)
+        ? `<button class="btn" data-publish="${entry.id}" style="padding:6px 12px">Publish now</button>` : ''}
       ${entry.status === 'posted' ? '' : `<button class="icon-btn" data-remove="${entry.id}">Remove</button>`}
     </div></div>`;
 }
@@ -697,9 +735,13 @@ function renderQueue() {
     }); } catch (error) { showPubError(error.message); }
     setTimeout(refreshPublishing, 2000);
   };
-  $('queueCard').querySelectorAll('[data-retry]').forEach((button) => {
-    button.onclick = () => api('/api/queue/' + button.dataset.retry + '/retry', { method: 'POST' })
-      .then(refreshPublishing).catch((error) => showPubError(error.message));
+  $('queueCard').querySelectorAll('[data-publish]').forEach((button) => {
+    button.onclick = async () => {
+      button.disabled = true; button.textContent = 'Uploading…';
+      try { await api('/api/queue/' + button.dataset.publish + '/publish', { method: 'POST' }); }
+      catch (error) { showPubError(error.message); }
+      refreshPublishing();
+    };
   });
   $('queueCard').querySelectorAll('[data-remove]').forEach((button) => {
     button.onclick = () => api('/api/queue/' + button.dataset.remove, { method: 'DELETE' })
