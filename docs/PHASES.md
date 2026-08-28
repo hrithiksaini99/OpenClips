@@ -126,3 +126,31 @@ Verification evidence (2026-08-27): the full suite ran in the operational-core D
 ## Parallelization policy
 
 After Phase 0 is verified, Phase 1 and provider-contract portions of Phase 5 may proceed independently with strict file ownership. Phase 2 depends on ingestion contracts. Phase 3 depends on normalized transcripts. Phase 4 depends on clip contracts. Phase 6 depends on review and approval semantics. No parallel worker may edit shared migration files, lifecycle enums, API schemas, or central configuration without coordination.
+
+## Working V1 completion gate
+
+Status: verified
+
+Verification evidence (2026-08-28): release-critical durability fixes now fail
+unknown job kinds transactionally, contain media writes beneath the configured
+root during path-swap races, restore interrupted Redis work ahead of new
+backlog, and enforce bounded worker/per-stage concurrency without acknowledging
+work before durable completion. Publication dispatch now claims due records
+atomically with `FOR UPDATE SKIP LOCKED`, writes queue events through the
+transactional outbox, resolves Instagram media only through configured public
+HTTP(S) URLs, cancels pending publications when a clip is edited, and exposes
+authenticated single/bulk schedule, retry, and cancel endpoints.
+
+The clean Docker gate completed with 325 passed and one expected skip for a
+Compose-resolution test inside the container where the Docker CLI is absent;
+host `docker compose config -q` passed. Ruff and strict mypy passed, Alembic was
+at head with no pending operations, and isolated plus live HTTP health/readiness
+smokes passed. The verified stack was launched on host ports 8002 (API), 5433
+(PostgreSQL), and 6380 (Redis) because an older OpenClips stack already occupied
+the defaults.
+
+Deferred beyond this working V1: automatic YouTube channel polling, retention
+sweeps, configured daily auto-slot windows, platform-specific social-copy
+persistence, advanced face/split-screen reframing, and a polished SPA. These do
+not block the documented podcast-first ingest-to-review and approved-to-publish
+workflow.

@@ -51,3 +51,24 @@ def test_restore_processing_redelivers_unacked_message() -> None:
     receipt = queue.claim("default", timeout_seconds=0)
     assert receipt is not None
     assert receipt.payload == "job-1"
+
+
+def test_restore_processing_preserves_fifo_priority() -> None:
+    queue = InMemoryJobQueue()
+
+    queue.enqueue("default", "job-1")
+    queue.enqueue("default", "job-2")
+    queue.claim("default")
+    queue.claim("default")
+    queue.enqueue("default", "job-3")
+    queue.restore_processing("default")
+
+    assert [
+        queue.claim("default"),
+        queue.claim("default"),
+        queue.claim("default"),
+    ] == [
+        QueueReceipt("default", "job-1"),
+        QueueReceipt("default", "job-2"),
+        QueueReceipt("default", "job-3"),
+    ]

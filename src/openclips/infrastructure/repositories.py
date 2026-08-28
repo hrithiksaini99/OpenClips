@@ -434,7 +434,14 @@ class PublicationRepository:
             .all()
         )
 
-    def due(self, now: datetime, *, limit: int = 50) -> list[PublicationRecord]:
+    def claim_due(self, now: datetime, limit: int) -> list[PublicationRecord]:
+        """Lock the oldest due publications for this transaction only.
+
+        ``SKIP LOCKED`` means a concurrent scheduler poll never blocks on and
+        never sees the same rows, so a publication is dispatched by exactly one
+        claimant; the locks are held until the caller commits the matching
+        ``ENQUEUE`` transitions and outbox rows.
+        """
         return (
             self.session.query(PublicationRecord)
             .filter(
@@ -442,9 +449,35 @@ class PublicationRepository:
                 PublicationRecord.scheduled_at <= now,
             )
             .order_by(PublicationRecord.scheduled_at.asc())
+            .with_for_update(skip_locked=True)
             .limit(limit)
             .all()
         )
+
+    def cancel_active_for_clip(self, clip_id: UUID) -> int:
+        """Cancel every live publication for a clip; return how many changed.
+
+        ``SCHEDULED`` and ``QUEUED`` records receive ``CANCEL``; ``PUBLISHED``,
+        ``FAILED`` and ``CANCELLED`` records are left untouched so published
+        history is never rewritten.
+        """
+        records = (
+            self.session.query(PublicationRecord)
+            .filter(
+                PublicationRecord.clip_id == clip_id,
+                PublicationRecord.status.in_(
+                    (PublicationStatus.SCHEDULED, PublicationStatus.QUEUED)
+                ),
+            )
+            .with_for_update()
+            .all()
+        )
+        for record in records:
+            record.status = PublicationStateMachine.transition(
+                record.status, PublicationEvent.CANCEL
+            )
+        self.session.flush()
+        return len(records)
 
     def transition(
         self,

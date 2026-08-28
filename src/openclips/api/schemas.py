@@ -4,8 +4,9 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+from openclips.domain.publishing import Platform, PublicationStatus
 from openclips.providers.transcription import TranscriptionReadiness
 
 
@@ -102,3 +103,37 @@ class SourceIngestOut(BaseModel):
 
 class TranscriptionReadinessOut(BaseModel):
     status: TranscriptionReadiness
+
+
+class SchedulePublicationBody(BaseModel):
+    clip_id: UUID
+    platform: Platform
+    scheduled_at: AwareDatetime | None = None
+
+
+class BulkSchedulePublicationBody(BaseModel):
+    clip_ids: list[UUID]
+    platform: Platform
+    scheduled_at: AwareDatetime | None = None
+
+
+class BulkPublicationResultItem(BaseModel):
+    clip_id: UUID
+    ok: bool
+    publication_id: UUID | None = None
+    error: str | None = None
+
+
+class PublicationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    clip_id: UUID
+    platform: Platform
+    status: PublicationStatus
+    scheduled_at: datetime
+    attempts: int
+    error: str | None
+    external_id: str | None
+    external_url: str | None
+    published_at: datetime | None

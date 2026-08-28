@@ -46,7 +46,7 @@ class InMemoryJobQueue:
         with self._lock:
             restored = len(self._processing[queue_name])
             while self._processing[queue_name]:
-                self._ready[queue_name].append(self._processing[queue_name].popleft())
+                self._ready[queue_name].appendleft(self._processing[queue_name].pop())
             return restored
 
     def depth(self, queue_name: str) -> int:
@@ -85,7 +85,7 @@ class RedisJobQueue:
     def restore_processing(self, queue_name: str) -> int:
         restored = 0
         while self._redis.lmove(
-            self._processing_key(queue_name), self._ready_key(queue_name), "LEFT", "RIGHT"
+            self._processing_key(queue_name), self._ready_key(queue_name), "RIGHT", "LEFT"
         ) is not None:
             restored += 1
         return restored

@@ -105,6 +105,8 @@ class YtDlpDownloader:
             "--no-progress",
             "--newline",
             "-f",
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+            "--merge-output-format",
             "mp4",
             "-o",
             str(destination),

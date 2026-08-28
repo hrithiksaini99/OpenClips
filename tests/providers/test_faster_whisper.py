@@ -39,12 +39,18 @@ class FakeModel:
     def __init__(self, segments: list[FakeSegment], info: FakeInfo) -> None:
         self._segments = segments
         self._info = info
-        self.calls: list[tuple[str, bool, bool]] = []
+        self.calls: list[tuple[str, bool, bool, int, int]] = []
 
     def transcribe(
-        self, path: str, *, word_timestamps: bool, vad_filter: bool
+        self,
+        path: str,
+        *,
+        word_timestamps: bool,
+        vad_filter: bool,
+        beam_size: int,
+        best_of: int,
     ) -> tuple[Iterator[FakeSegment], FakeInfo]:
-        self.calls.append((path, word_timestamps, vad_filter))
+        self.calls.append((path, word_timestamps, vad_filter, beam_size, best_of))
         return iter(self._segments), self._info
 
 
@@ -83,7 +89,10 @@ def test_transcribe_builds_document_through_fake_model(tmp_path: Path) -> None:
         [FakeSegment(0.0, 1.0, "hello", [FakeWord("hello", 0.0, 1.0, 0.99)])],
         FakeInfo(language="en", duration=1.0),
     )
-    provider = FasterWhisperProvider(model_factory=lambda size, device, compute: model)
+    provider = FasterWhisperProvider(
+        model_factory=lambda size, device, compute: model,
+        chunker=lambda media_path, _directory, _seconds: (media_path,),
+    )
 
     document = provider.transcribe(media)
 
@@ -91,7 +100,37 @@ def test_transcribe_builds_document_through_fake_model(tmp_path: Path) -> None:
     assert document.language == "en"
     assert document.duration == pytest.approx(1.0)
     assert document.full_text == "hello"
-    assert model.calls == [(str(media), True, True)]
+    assert model.calls == [(str(media), True, True, 1, 1)]
+
+
+def test_transcribe_offsets_bounded_audio_chunks(tmp_path: Path) -> None:
+    media = tmp_path / "podcast.mp4"
+    media.write_bytes(b"fake")
+    model = FakeModel(
+        [FakeSegment(1.0, 2.0, "hello", [FakeWord("hello", 1.0, 2.0, 0.9)])],
+        FakeInfo(language="en", duration=10.0),
+    )
+
+    def chunker(media_path: Path, directory: Path, seconds: int) -> tuple[Path, ...]:
+        assert media_path == media
+        assert seconds == 600
+        first = directory / "chunk-00000.wav"
+        second = directory / "chunk-00001.wav"
+        first.write_bytes(b"one")
+        second.write_bytes(b"two")
+        return first, second
+
+    provider = FasterWhisperProvider(
+        model_factory=lambda size, device, compute: model,
+        chunker=chunker,
+    )
+
+    document = provider.transcribe(media)
+
+    assert document.duration == pytest.approx(20.0)
+    assert [segment.start for segment in document.segments] == [1.0, 11.0]
+    assert [segment.words[0].start for segment in document.segments] == [1.0, 11.0]
+    assert len(model.calls) == 2
 
 
 def test_transcribe_requires_existing_media(tmp_path: Path) -> None:

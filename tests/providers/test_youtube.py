@@ -80,6 +80,10 @@ def test_download_builds_shell_free_argv_and_runs_once(tmp_path: Path) -> None:
     assert argv[0] == "yt-dlp"
     assert "--newline" in argv
     assert "--no-progress" in argv
+    format_index = argv.index("-f")
+    assert argv[format_index + 1] == "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
+    merge_index = argv.index("--merge-output-format")
+    assert argv[merge_index + 1] == "mp4"
     output_index = argv.index("-o")
     assert argv[output_index + 1] == str(destination)
     separator_index = argv.index("--")
@@ -174,6 +178,8 @@ def test_runner_receives_list_argv_only_once_per_download(tmp_path: Path) -> Non
             "--no-progress",
             "--newline",
             "-f",
+            "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+            "--merge-output-format",
             "mp4",
             "-o",
             str(destination),

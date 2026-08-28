@@ -11,12 +11,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from openclips.application.publishing import ScheduleCoordinator
 from openclips.config import Settings
 from openclips.domain.clips import ClipEvent, ClipStatus
 from openclips.domain.jobs import JobEvent
+from openclips.domain.publishing import Platform, PublicationStatus
 from openclips.domain.sources import SourceEvent, SourceKind
 from openclips.infrastructure.models import Base, OutboxRecord
-from openclips.infrastructure.repositories import ClipRepository, JobRepository, SourceRepository
+from openclips.infrastructure.repositories import (
+    ClipRepository,
+    JobRepository,
+    PublicationRepository,
+    SourceRepository,
+)
 from openclips.main import create_app
 
 TOKEN = "test-admin-token"
@@ -293,6 +300,26 @@ def test_retry_failed_job_creates_new_dispatch(client) -> None:
         assert event.queue_name == "default"
 
 
+def test_retry_rejects_unregistered_kind(client) -> None:
+    test_client, factory = client
+    with factory() as session:
+        jobs = JobRepository(session)
+        failed = jobs.create("legacy_unregistered_kind", payload=str(uuid4()))
+        jobs.transition(failed.id, JobEvent.START)
+        jobs.transition(failed.id, JobEvent.FAIL, error="legacy worker failure")
+        failed_id = failed.id
+        session.commit()
+
+    response = test_client.post(f"/api/v1/jobs/{failed_id}/retry", headers=_auth())
+
+    assert response.status_code == 409
+    assert "legacy_unregistered_kind" in response.json()["detail"]
+    with factory() as session:
+        refreshed = JobRepository(session).get(failed_id)
+        assert refreshed is not None
+        assert refreshed.status.value == "FAILED"
+
+
 def test_render_enqueue_requires_reviewable_clip(client) -> None:
     test_client, factory = client
     ids = _seed(factory)
@@ -304,6 +331,50 @@ def test_render_enqueue_requires_reviewable_clip(client) -> None:
     assert response.status_code == 200
     assert response.json()["kind"] == "render_clip"
     assert response.json()["status"] == "QUEUED"
+
+
+def test_editing_scheduled_clip_cancels_publications(client) -> None:
+    test_client, factory = client
+    ids = _seed(factory)
+    clip_id = UUID(ids["clip1"])  # type: ignore[arg-type]
+
+    assert (
+        test_client.post(f"/api/v1/clips/{clip_id}/approve", headers=_auth()).status_code
+        == 200
+    )
+    with factory() as session:
+        coordinator = ScheduleCoordinator(
+            clips=ClipRepository(session),
+            publications=PublicationRepository(session),
+            jobs=JobRepository(session),
+        )
+        publication = coordinator.schedule(
+            clip_id,
+            Platform.YOUTUBE_SHORTS,
+            scheduled_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+        publication_id = publication.id
+        session.commit()
+
+    response = test_client.patch(
+        f"/api/v1/clips/{clip_id}",
+        json={"title": "Renamed clip"},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == ClipStatus.NEEDS_REVIEW.value
+    with factory() as session:
+        publications = PublicationRepository(session)
+        assert publications.get(publication_id).status is PublicationStatus.CANCELLED  # type: ignore[union-attr]
+        coordinator = ScheduleCoordinator(
+            clips=ClipRepository(session),
+            publications=publications,
+            jobs=JobRepository(session),
+        )
+        jobs = coordinator.enqueue_due()
+        session.commit()
+        assert jobs == []
 
 
 def test_dashboard_lists_review_queue_titles(client) -> None:

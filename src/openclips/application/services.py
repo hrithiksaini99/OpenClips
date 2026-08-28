@@ -7,6 +7,7 @@ from openclips.domain.captions import CaptionStyle, get_template
 from openclips.domain.selection import SelectionBounds
 from openclips.infrastructure.media_storage import MediaStorage
 from openclips.providers.llm import ClipRefiner, HeuristicClipRefiner
+from openclips.providers.media_urls import PublicMediaUrlProvider, build_media_url_provider
 from openclips.providers.renderer import (
     RENDER_HEIGHT,
     RENDER_WIDTH,
@@ -29,6 +30,7 @@ class AppServices:
     renderer: FFmpegRenderer
     crop_strategy: CenterCropStrategy
     downloader: YtDlpDownloader
+    media_url_provider: PublicMediaUrlProvider
     max_upload_bytes: int
     width: int = RENDER_WIDTH
     height: int = RENDER_HEIGHT
@@ -56,6 +58,7 @@ def build_services(settings: Settings) -> AppServices:
         renderer=FFmpegRenderer(),
         crop_strategy=CenterCropStrategy(),
         downloader=YtDlpDownloader(),
+        media_url_provider=build_media_url_provider(settings.public_media_base_url),
         max_upload_bytes=settings.max_upload_bytes,
         width=settings.render_width,
         height=settings.render_height,

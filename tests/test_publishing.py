@@ -16,9 +16,11 @@ from openclips.application.publishing import (
     SchedulingExhaustedError,
 )
 from openclips.domain.clips import ClipEvent, ClipStatus
+from openclips.domain.errors import InvalidTransitionError
 from openclips.domain.publishing import (
     MAX_PUBLICATION_ATTEMPTS,
     Platform,
+    PublicationEvent,
     PublicationStatus,
     backoff_seconds,
 )
@@ -157,6 +159,7 @@ def test_rule_based_slots_are_deterministic_and_ordered(harness: _Harness) -> No
 def test_publish_success_records_external_identity(harness: _Harness) -> None:
     clip_id = harness.clips.list_all()[0].id
     record = harness.coordinator.schedule(clip_id, Platform.YOUTUBE_SHORTS)
+    harness.coordinator.enqueue_due()
 
     published = harness.coordinator.publish_publication(record.id)
 
@@ -172,6 +175,7 @@ def test_failure_preserves_reason_and_backs_off_within_budget(harness: _Harness)
     harness.publisher.fail_times = 2
     clip_id = harness.clips.list_all()[0].id
     record = harness.coordinator.schedule(clip_id, Platform.YOUTUBE_SHORTS)
+    harness.coordinator.enqueue_due()
 
     after_first = harness.coordinator.publish_publication(record.id)
     assert after_first.status is PublicationStatus.SCHEDULED
@@ -180,6 +184,7 @@ def test_failure_preserves_reason_and_backs_off_within_budget(harness: _Harness)
     assert after_first.scheduled_at == FROZEN_NOW + timedelta(seconds=backoff_seconds(1))
 
     harness.publisher.fail_times = 0
+    harness.publications.transition(record.id, PublicationEvent.ENQUEUE)
     recovered = harness.coordinator.publish_publication(record.id)
     assert recovered.status is PublicationStatus.PUBLISHED
     assert recovered.attempts == 2
@@ -191,6 +196,7 @@ def test_retry_budget_is_bounded_and_observable(harness: _Harness) -> None:
     record = harness.coordinator.schedule(clip_id, Platform.YOUTUBE_SHORTS)
 
     for _ in range(MAX_PUBLICATION_ATTEMPTS):
+        harness.publications.transition(record.id, PublicationEvent.ENQUEUE)
         harness.coordinator.publish_publication(record.id)
 
     exhausted = harness.publications.get(record.id)
@@ -202,7 +208,7 @@ def test_retry_budget_is_bounded_and_observable(harness: _Harness) -> None:
         harness.coordinator.retry(record.id)
 
 
-def test_enqueue_due_dispatches_platform_queue_jobs(harness: _Harness) -> None:
+def test_enqueue_due_queues_each_due_publication_exactly_once(harness: _Harness) -> None:
     clip_id = harness.clips.list_all()[0].id
     due_record = harness.coordinator.schedule(
         clip_id, Platform.YOUTUBE_SHORTS, scheduled_at=FROZEN_NOW - timedelta(minutes=5)
@@ -214,6 +220,34 @@ def test_enqueue_due_dispatches_platform_queue_jobs(harness: _Harness) -> None:
     assert [job.payload for job in created] == [str(due_record.id)]
     event = harness.session.query(OutboxRecord).filter_by(job_id=created[0].id).one()
     assert event.queue_name == "publish.youtube_shorts"
+    queued = harness.publications.get(due_record.id)
+    assert queued is not None and queued.status is PublicationStatus.QUEUED
+
+    assert harness.coordinator.enqueue_due() == []
+    assert harness.session.query(OutboxRecord).count() == 1
+
+
+def test_publish_requires_a_queued_publication(harness: _Harness) -> None:
+    clip_id = harness.clips.list_all()[0].id
+    record = harness.coordinator.schedule(clip_id, Platform.YOUTUBE_SHORTS)
+
+    with pytest.raises(InvalidTransitionError):
+        harness.coordinator.publish_publication(record.id)
+
+    assert harness.publisher.calls == []
+
+
+def test_cancelled_publication_never_reaches_the_platform(harness: _Harness) -> None:
+    clip_id = harness.clips.list_all()[0].id
+    record = harness.coordinator.schedule(clip_id, Platform.YOUTUBE_SHORTS)
+    harness.coordinator.enqueue_due()
+    cancelled = harness.publications.transition(record.id, PublicationEvent.CANCEL)
+
+    unchanged = harness.coordinator.publish_publication(record.id)
+
+    assert unchanged.status is PublicationStatus.CANCELLED
+    assert unchanged.attempts == cancelled.attempts == 0
+    assert harness.publisher.calls == []
 
 
 def test_worker_publishes_through_platform_queue(harness: _Harness) -> None:
@@ -263,6 +297,62 @@ def _publish_handler(harness: _Harness):  # type: ignore[no-untyped-def]
         coordinator.run(job)  # type: ignore[arg-type]
 
     return handle
+
+
+def test_instagram_publish_fails_when_public_media_url_is_unavailable(harness: _Harness) -> None:
+    from openclips.providers.media_urls import UnavailableMediaUrlProvider
+
+    transport_calls: list[object] = []
+
+    class RecordingPublisher:
+        def publish(self, request: object) -> PublishResult:
+            transport_calls.append(request)
+            return PublishResult(external_id="x", external_url="https://x/x")
+
+    coordinator = ScheduleCoordinator(
+        clips=harness.clips,
+        publications=harness.publications,
+        jobs=harness.jobs,
+        publishers={Platform.INSTAGRAM_REELS: RecordingPublisher()},
+        storage=harness.coordinator.storage,
+        clock=_clock,
+        media_url_provider=UnavailableMediaUrlProvider(),
+    )
+    clip_id = harness.clips.list_all()[0].id
+    record = coordinator.schedule(clip_id, Platform.INSTAGRAM_REELS)
+    coordinator.enqueue_due()
+
+    failed = coordinator.publish_publication(record.id)
+
+    assert failed.status is PublicationStatus.SCHEDULED
+    assert failed.error is not None and "OPENCLIPS_PUBLIC_MEDIA_BASE_URL" in failed.error
+    assert transport_calls == []
+
+
+def test_cancel_for_clip_cancels_scheduled_and_queued_only(harness: _Harness) -> None:
+    clip_id = harness.clips.list_all()[0].id
+    scheduled = harness.publications.create(
+        clip_id=clip_id, platform=Platform.YOUTUBE_SHORTS, scheduled_at=FROZEN_NOW
+    )
+    queued = harness.publications.create(
+        clip_id=clip_id, platform=Platform.INSTAGRAM_REELS, scheduled_at=FROZEN_NOW
+    )
+    harness.publications.transition(queued.id, PublicationEvent.ENQUEUE)
+    published = harness.publications.create(
+        clip_id=clip_id, platform=Platform.YOUTUBE_SHORTS, scheduled_at=FROZEN_NOW
+    )
+    harness.publications.transition(published.id, PublicationEvent.ENQUEUE)
+    harness.publications.transition(published.id, PublicationEvent.START)
+    harness.publications.attach_result(
+        published.id, external_id="ext-1", external_url="https://x/ext-1"
+    )
+
+    count = harness.coordinator.cancel_for_clip(clip_id)
+
+    assert count == 2
+    assert harness.publications.get(scheduled.id).status is PublicationStatus.CANCELLED  # type: ignore[union-attr]
+    assert harness.publications.get(queued.id).status is PublicationStatus.CANCELLED  # type: ignore[union-attr]
+    assert harness.publications.get(published.id).status is PublicationStatus.PUBLISHED  # type: ignore[union-attr]
 
 
 def test_backoff_is_exponential_and_capped() -> None:

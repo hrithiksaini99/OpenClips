@@ -3,7 +3,6 @@
 import json
 import subprocess
 from collections.abc import Sequence
-from pathlib import Path
 
 from openclips.providers.platforms.base import (
     PlatformPublisher,
@@ -43,8 +42,11 @@ class InstagramReelsPublisher(PlatformPublisher):
             msg = "Instagram account credentials are not configured"
             raise PublishError(msg)
         require_media(request)
+        if request.media_url is None:
+            msg = "Instagram Reels require a publicly reachable media URL"
+            raise PublishError(msg)
 
-        media_url = f"file://{Path(request.clip_media).resolve()}"
+        media_url = request.media_url
         container_argv = [
             self._binary,
             "-sS",

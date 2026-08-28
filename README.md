@@ -25,6 +25,11 @@ curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
+If ports 8000, 5432, or 6379 are already occupied, set
+`OPENCLIPS_API_HOST_PORT`, `OPENCLIPS_POSTGRES_HOST_PORT`, and
+`OPENCLIPS_REDIS_HOST_PORT` in `.env`. Container-to-container URLs do not need
+to change.
+
 Stop services while retaining database data:
 
 ```bash
@@ -50,11 +55,17 @@ Integration persistence tests run when `DATABASE_URL` points to a disposable Pos
 ./scripts/verify.sh
 ```
 
-It applies migrations, runs the full suite (including the real PostgreSQL/Redis/FFmpeg `upload → transcribe → select → render` integration test), Ruff, strict mypy, `alembic check`, and an HTTP `/health` + `/ready` smoke check on a one-off container. Run it with host ports 5432/6379 free (stop any other stack bound to them first).
+It applies migrations, runs the full suite (including the real PostgreSQL/Redis/FFmpeg `upload → transcribe → select → render` integration test), Ruff, strict mypy, `alembic check`, and an HTTP `/health` + `/ready` smoke check on a one-off container. Host ports can be overridden in `.env` when another stack is already using the defaults.
 
 ## Review API
 
-Interactive documentation is served at `http://localhost:8000/docs`. All mutating endpoints require `Authorization: Bearer $OPENCLIPS_ADMIN_TOKEN`; when no token is configured they fail closed with HTTP 503. Reads are public.
+Interactive documentation is served at `http://localhost:8000/docs`. The HTML review queue is at `http://localhost:8000/api/v1/dashboard`. All mutating endpoints require `Authorization: Bearer $OPENCLIPS_ADMIN_TOKEN`; when no token is configured they fail closed with HTTP 503. Reads are public.
+
+The working publication API supports listing, scheduling one or many approved
+clips, retrying failed publications, and cancelling pending publications.
+Editing a clip atomically cancels its pending schedules. The worker claims due
+publications transactionally and dispatches them to independent Instagram and
+YouTube queues.
 
 ## Configuration
 

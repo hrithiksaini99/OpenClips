@@ -4,10 +4,11 @@ from collections.abc import Callable, Iterator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from openclips.api.publishing_routes import add_publishing_routes
 from openclips.api.schemas import (
     BulkActionBody,
     BulkResultItem,
@@ -23,6 +24,8 @@ from openclips.api.schemas import (
 )
 from openclips.application.clipping import ClipSelectionCoordinator
 from openclips.application.ingestion import IngestionCoordinator
+from openclips.application.pipeline import is_known_job_kind
+from openclips.application.publishing import ScheduleCoordinator
 from openclips.application.rendering import RenderCoordinator
 from openclips.application.services import AppServices
 from openclips.application.transcription import TranscriptionCoordinator
@@ -33,6 +36,7 @@ from openclips.domain.jobs import JobStatus
 from openclips.infrastructure.repositories import (
     ClipRepository,
     JobRepository,
+    PublicationRepository,
     SourceRepository,
     TranscriptRepository,
 )
@@ -255,10 +259,13 @@ def build_router(
     )
     def retry_job(job_id: UUID, session: Session = Depends(get_session)) -> JobOut:
         _, jobs, _ = _repos(session)
+        current = jobs.get(job_id)
+        if current is None:
+            raise _not_found("Job", job_id)
+        if not is_known_job_kind(current.kind):
+            raise _conflict(f"Cannot retry unregistered job kind {current.kind!r}")
         try:
             job, _event = jobs.retry_dispatched(job_id)
-        except KeyError as error:
-            raise _not_found("Job", job_id) from error
         except InvalidTransitionError as error:
             raise _conflict(error) from error
         return JobOut.model_validate(job)
@@ -287,6 +294,40 @@ def build_router(
             raise _not_found("Clip", clip_id)
         return ClipOut.model_validate(record)
 
+    def _clip_artifact(clip_id: UUID, session: Session, attribute: str) -> FileResponse:
+        _, _, clips = _repos(session)
+        record = clips.get(clip_id)
+        if record is None:
+            raise _not_found("Clip", clip_id)
+        key = getattr(record, attribute)
+        if not key:
+            raise _not_found("Clip artifact", clip_id)
+        path = services.storage.resolve(str(key))
+        if not path.is_file():
+            raise _not_found("Clip artifact", clip_id)
+        return FileResponse(path)
+
+    @router.get("/clips/{clip_id}/media")
+    def get_clip_media(
+        clip_id: UUID, session: Session = Depends(get_session)
+    ) -> FileResponse:
+        return _clip_artifact(clip_id, session, "output_path")
+
+    @router.get("/clips/{clip_id}/caption")
+    def get_clip_caption(
+        clip_id: UUID, session: Session = Depends(get_session)
+    ) -> FileResponse:
+        return _clip_artifact(clip_id, session, "caption_path")
+
+    def _cancel_live_publications(session: Session, clip_id: UUID) -> None:
+        """Cancel a clip's SCHEDULED/QUEUED publications in this request session."""
+        coordinator = ScheduleCoordinator(
+            clips=ClipRepository(session),
+            publications=PublicationRepository(session),
+            jobs=JobRepository(session),
+        )
+        coordinator.cancel_for_clip(clip_id)
+
     def _apply_edit_event(clips: ClipRepository, clip_id: UUID) -> None:
         try:
             clips.transition(clip_id, ClipEvent.EDIT)
@@ -311,6 +352,7 @@ def build_router(
             clips.set_timespan(
                 clip_id, start_time=body.start_time, end_time=body.end_time
             )
+        _cancel_live_publications(session, clip_id)
         _apply_edit_event(clips, clip_id)
         updated = clips.get(clip_id)
         assert updated is not None
@@ -329,6 +371,7 @@ def build_router(
         clips.set_caption_edits(
             clip_id, [{"match": e.match, "replacement": e.replacement} for e in body.edits]
         )
+        _cancel_live_publications(session, clip_id)
         _apply_edit_event(clips, clip_id)
         updated = clips.get(clip_id)
         assert updated is not None
@@ -435,5 +478,12 @@ def build_router(
             "</body></html>"
         )
         return HTMLResponse(content=html)
+
+    add_publishing_routes(
+        router,
+        get_session=get_session,
+        require_admin=require_admin,
+        services=services,
+    )
 
     return router
