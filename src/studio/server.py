@@ -31,6 +31,7 @@ class JobRequest(BaseModel):
     model: str = pipeline.DEFAULT_MODEL
     workers: int = 4
     face_track: bool = True
+    use_llm: bool = True
     transcript: str | None = None  # optional pre-computed transcript, for reruns
 
 
@@ -53,6 +54,7 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
             model_size=request.model,
             workers=request.workers,
             face_track=request.face_track,
+            use_llm=request.use_llm,
             transcript_path=Path(request.transcript) if request.transcript else None,
         )
         _running.pop(job_id, None)

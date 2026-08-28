@@ -16,11 +16,12 @@ import tempfile
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
 from studio.captions import CaptionStyle
+from studio.llm import ClipRanker
 from studio.tools import binary
 from studio.render import render_clip
 from studio.select import ClipCandidate, find_clips
@@ -486,6 +487,54 @@ def _render_one(payload: dict[str, Any]) -> dict[str, Any]:
     return {"id": payload["id"], "thumbnail": thumbnail.name}
 
 
+def rank_candidates(
+    pool: list[ClipCandidate],
+    limit: int,
+    hook: ProgressHook,
+    *,
+    use_llm: bool = True,
+) -> list[ClipCandidate]:
+    """Let a local model choose the final clips, falling back to the heuristics.
+
+    The heuristics find spans that are well formed and energetic; they cannot
+    judge whether a moment is worth watching. The model reads the shortlist and
+    scores it, and its title replaces the first sentence when it gives one.
+    Blending keeps a little of the heuristic signal so one odd model answer
+    cannot promote a rambling span.
+    """
+    if len(pool) <= limit:
+        return pool
+    if not use_llm:
+        return sorted(pool, key=lambda candidate: candidate.start)[:limit]
+
+    ranker = ClipRanker()
+    if not ranker.available():
+        hook("select", _stage_progress("select", 0.9), "Ranking locally (no LLM available)…")
+        return sorted(pool[:limit], key=lambda candidate: candidate.start)
+
+    hook("select", _stage_progress("select", 0.5), f"Asking {ranker.model} to pick the best {limit}…")
+    rankings = {rank.index: rank for rank in ranker.rank([c.text for c in pool])}
+    if not rankings:
+        return sorted(pool[:limit], key=lambda candidate: candidate.start)
+
+    heuristic_top = max((c.score for c in pool), default=1.0) or 1.0
+    scored: list[tuple[float, ClipCandidate]] = []
+    for index, candidate in enumerate(pool):
+        rank = rankings.get(index)
+        if rank is None:
+            continue  # unscored by the model: leave it out rather than guess
+        blended = rank.score * 0.8 + (candidate.score / heuristic_top) * 100 * 0.2
+        title = rank.title if len(rank.title) > 8 else candidate.title
+        scored.append((blended, replace(candidate, title=title, score=round(blended, 2))))
+
+    if not scored:
+        return sorted(pool[:limit], key=lambda candidate: candidate.start)
+    scored.sort(key=lambda pair: -pair[0])
+    chosen = [candidate for _score, candidate in scored[:limit]]
+    hook("select", _stage_progress("select", 1.0), f"{ranker.model} picked {len(chosen)} clips")
+    return sorted(chosen, key=lambda candidate: candidate.start)
+
+
 def run_job(
     *,
     job_id: str,
@@ -496,6 +545,7 @@ def run_job(
     workers: int = 4,
     transcript_path: Path | None = None,
     face_track: bool = True,
+    use_llm: bool = True,
 ) -> JobState:
     """Take a URL or local file all the way to rendered clips on disk."""
     directory = job_dir(job_id)
@@ -548,10 +598,13 @@ def run_job(
         if not words:
             raise RuntimeError("Transcription produced no words")
 
-        report("select", _stage_progress("select", 0.5), "Finding the strongest moments…")
-        candidates = find_clips(build_sentences(words), max_clips=max_clips)
-        if not candidates:
+        report("select", _stage_progress("select", 0.3), "Finding the strongest moments…")
+        sentences = build_sentences(words)
+        # Shortlist wider than needed so the model has something to choose from.
+        pool = find_clips(sentences, max_clips=min(max_clips * 3, 45))
+        if not pool:
             raise RuntimeError("No clip-worthy segments found")
+        candidates = rank_candidates(pool, max_clips, report, use_llm=use_llm)
 
         if pending_video is not None:
             report("render", _stage_progress("render", 0.0), "Waiting for the video download…")

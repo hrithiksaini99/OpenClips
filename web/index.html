@@ -95,6 +95,13 @@
           <option>2</option><option selected>4</option><option>6</option><option>8</option>
         </select>
       </div>
+      <div>
+        <label for="ranker">Pick clips</label>
+        <select id="ranker">
+          <option value="llm" selected>AI ranked</option>
+          <option value="heuristic">Fast (no AI)</option>
+        </select>
+      </div>
       <button id="go">Generate clips</button>
     </div>
 
@@ -224,6 +231,7 @@ $('go').onclick = async () => {
         max_clips: +$('count').value,
         model: $('model').value,
         workers: +$('workers').value,
+        use_llm: $('ranker').value === 'llm',
       }),
     });
     current = id;
