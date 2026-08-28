@@ -1,0 +1,11 @@
+# OpenClips Studio - native pipeline runtime.
+# Install into a Python 3.12 virtualenv: pip install -r requirements-studio.txt
+faster-whisper>=1.2      # speech-to-text (CTranslate2; CPU, or CUDA on NVIDIA)
+yt-dlp>=2026.8           # YouTube download
+opencv-python-headless>=4.10   # face detection for vertical framing
+pillow>=11                # caption rendering (no libass needed)
+fastapi>=0.115            # local API
+uvicorn[standard]>=0.30   # server
+python-multipart>=0.0.9   # file upload form parsing
+psutil>=6                 # memory-aware concurrency
+numpy>=2

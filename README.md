@@ -1,76 +1,169 @@
 # OpenClips
 
-OpenClips is a self-hosted, local-AI-first platform for turning podcast and interview videos into reviewable short-form clips. It runs the whole pipeline durably: PostgreSQL owns jobs and a transactional outbox, the worker relays due events onto reliable Redis lists, and one authenticated upload or YouTube URL flows automatically from ingestion through transcription, selection, and 9:16 rendering.
+Turn a long podcast or interview into vertical short-form clips, entirely on your
+own machine. Give it a YouTube link or a local file and it returns 9:16 MP4s with
+word-by-word captions burned in, framed on whoever is speaking, ready to post.
 
-## Pipeline
+No cloud service, no per-clip credits, no watermarks. Transcription and clip
+selection both run locally.
 
-1. **Ingest** a local `.mp4`/`.mov` upload (`POST /api/v1/sources/upload`, bounded streaming) or a YouTube watch URL (`POST /api/v1/sources/youtube`, background download via shell-free yt-dlp).
-2. **Transcribe** locally with faster-whisper through durable outbox-dispatched jobs (`transcribe`).
-3. **Select** deterministic candidates with dead-air trimming and an LLM refiner contract (`select_clips`).
-4. **Render** 9:16 media with caption templates, word highlighting, profanity masking, and transcript edits (`render_clip`).
-5. **Review** via the admin API and dashboard: edit, approve, reject, bulk actions.
-6. **Publish** approved clips to Instagram Reels and YouTube Shorts on independent per-platform queues with bounded backoff.
+## What it produces
 
-When a source opts into automation (`auto_process`, the default), each successful stage dispatches its successor in the same database transaction, so the pipeline advances with no manual queue writes. Set `auto_process=false` to drive the stages manually through the existing per-stage endpoints. Model download progress is observable, without gating the pipeline, at `GET /api/v1/system/transcription-readiness`.
+Each clip is a 1080x1920 MP4 containing:
 
-## Development
+- **Word-by-word captions**, the active word highlighted, drawn directly by the
+  renderer (no libass or system fonts required beyond a bold TTF)
+- **Face-aware framing** that follows the speaker and re-frames at camera cuts,
+  instead of a fixed centre crop that slices people out of shot
+- **A complete thought**, 28-75 seconds, starting on a real sentence and ending
+  on terminal punctuation
+- **Normalised audio** at roughly -14 LUFS, the level social platforms target
+- A title taken from the moment's own hook
 
-Requirements: Docker with Compose and Python 3.11+ for local tooling.
+## Requirements
 
-```bash
-cp .env.example .env
-docker compose up -d --build
-docker compose exec api alembic upgrade head
-curl http://localhost:8000/health
-curl http://localhost:8000/ready
-```
+| | |
+|---|---|
+| Python | 3.12 |
+| FFmpeg | any recent build, on `PATH` (`brew install ffmpeg`, `winget install ffmpeg`, `apt install ffmpeg`) |
+| Disk | ~3 GB per hour of source video while a job runs |
+| RAM | 8 GB works; the pipeline sizes itself to what is free |
+| Ollama | optional, only for AI clip ranking |
 
-If ports 8000, 5432, or 6379 are already occupied, set
-`OPENCLIPS_API_HOST_PORT`, `OPENCLIPS_POSTGRES_HOST_PORT`, and
-`OPENCLIPS_REDIS_HOST_PORT` in `.env`. Container-to-container URLs do not need
-to change.
+FFmpeg does **not** need `libass` or `freetype`: captions are rendered by the
+application and composited as images, so minimal FFmpeg builds work fine.
 
-Stop services while retaining database data:
-
-```bash
-docker compose down
-```
-
-Run local checks with a Python 3.11+ environment:
+## Install
 
 ```bash
-pip install -e '.[dev]'
-pytest -q
-ruff check src tests
-mypy src
+git clone https://github.com/hrithiksaini99/OpenClips.git
+cd OpenClips
+python3.12 -m venv .venv-native
+.venv-native/bin/pip install -r requirements-studio.txt
 ```
 
-Integration persistence tests run when `DATABASE_URL` points to a disposable PostgreSQL database named `openclips_test_*` (and `REDIS_URL` for the Redis-backed tests); otherwise they skip explicitly. They never touch the developer database or named volumes.
+On Windows use `.venv-native\Scripts\pip` instead.
 
-### Full verification gate
-
-`scripts/verify.sh` runs the complete gate in the Compose stack against a disposable database and a reserved Redis logical database, without disturbing the developer database, named volumes, or a running dev `api` service:
+## Run
 
 ```bash
-./scripts/verify.sh
+PYTHONPATH=src .venv-native/bin/python -m studio.server
 ```
 
-It applies migrations, runs the full suite (including the real PostgreSQL/Redis/FFmpeg `upload → transcribe → select → render` integration test), Ruff, strict mypy, `alembic check`, and an HTTP `/health` + `/ready` smoke check on a one-off container. Host ports can be overridden in `.env` when another stack is already using the defaults.
+Then open **http://127.0.0.1:8080**.
 
-## Review API
+Paste a link, choose how many clips you want, and press **Generate clips**.
+Progress is live; finished clips appear as playable cards you can download.
 
-Interactive documentation is served at `http://localhost:8000/docs`. The HTML review queue is at `http://localhost:8000/api/v1/dashboard`. All mutating endpoints require `Authorization: Bearer $OPENCLIPS_ADMIN_TOKEN`; when no token is configured they fail closed with HTTP 503. Reads are public.
+Accepted inputs:
 
-The working publication API supports listing, scheduling one or many approved
-clips, retrying failed publications, and cancelling pending publications.
-Editing a clip atomically cancels its pending schedules. The worker claims due
-publications transactionally and dispatches them to independent Instagram and
-YouTube queues.
+```
+https://www.youtube.com/watch?v=VIDEO_ID
+youtube.com/watch?v=VIDEO_ID          # scheme optional
+https://youtu.be/VIDEO_ID
+https://www.youtube.com/@channel/videos   # uses the channel's latest episode
+/path/to/local/episode.mp4
+```
 
-## Configuration
+Clips are written to `clips/<job-id>/` inside the project, alongside a
+`job.json` describing each one. Downloaded sources are cached in `media/source/`
+and reused, so re-running an episode costs nothing.
 
-Platform credentials stay empty by default; publishing adapters activate only after `OPENCLIPS_INSTAGRAM_ACCOUNT_ID`, `OPENCLIPS_INSTAGRAM_ACCESS_TOKEN`, and `OPENCLIPS_YOUTUBE_ACCESS_TOKEN` are set. Local transcription uses faster-whisper (opt-in extra: `pip install '.[transcription]'`).
+## Controls
 
-See [docs/PRD.md](docs/PRD.md), [docs/PHASES.md](docs/PHASES.md), and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for scope and verification gates.
+| Control | Meaning |
+|---|---|
+| **Clips** | How many to produce |
+| **Model** | Whisper size. `small` is the sweet spot; `medium` is more accurate and roughly twice as slow |
+| **Parallel** | Requested concurrency. The pipeline lowers this if memory is tight |
+| **Pick clips** | `AI ranked` uses a local LLM; `Fast` uses heuristics only |
 
-The project license is intentionally undecided.
+## AI clip ranking (optional)
+
+With [Ollama](https://ollama.com) running, a local model reads the shortlisted
+moments, scores them, and writes each title. Without it, the heuristic ranking is
+used and nothing fails.
+
+```bash
+ollama pull gemma3:4b
+export OPENCLIPS_LLM_MODEL=gemma3:4b     # default: gemma4:latest
+export OPENCLIPS_OLLAMA_HOST=http://localhost:11434
+```
+
+Pick a model that fits your VRAM. On a 4 GB card a ~4B model is appropriate; a
+larger one still works but runs on the CPU, adding a minute or two per episode.
+
+## How it works
+
+```
+URL ─┬─> audio  ──> transcribe ──> sentences ──> shortlist ──> LLM rank ─┐
+     └─> video  ─────────────────────────────────────────────────────────┴─> render
+```
+
+1. **Download** — audio and video are fetched concurrently as separate streams
+   and never merged. Audio is small, so transcription starts while the video is
+   still arriving.
+2. **Transcribe** — faster-whisper with word-level timestamps, run over parallel
+   slices sharing one model instance.
+3. **Select** — words are grouped into sentences; whole-sentence spans are scored
+   on hook strength, substance, speech density and length.
+4. **Rank** — an optional local LLM picks the final set and titles them.
+5. **Render** — per clip, in parallel: face-tracked crop, caption overlay,
+   loudness normalisation.
+
+## Performance
+
+Measured on an M4 Pro for a 2.5 hour episode:
+
+| Stage | Time |
+|---|---|
+| Download | ~12 min (concurrent fragments; ~2-3 MB/s) |
+| Transcription | ~10 min at `small` |
+| Selection + LLM ranking | under a minute |
+| Rendering 12 clips | ~1-2 min |
+
+Transcription peaks around 1.4 GB regardless of worker count, because parallel
+slices share a single model rather than loading one copy each.
+
+### GPU
+
+Transcription runs on the CPU by default. On an NVIDIA card, CTranslate2 supports
+CUDA and `large-v3` at int8 needs roughly 2.5 GB of VRAM. On Apple Silicon
+CTranslate2 has no Metal backend, so the CPU path is used there.
+
+## Troubleshooting
+
+**`Required tool 'yt-dlp' was not found`** — install it into the same virtualenv
+you run the server from: `.venv-native/bin/pip install yt-dlp`.
+
+**A download fails** — yt-dlp is upgraded and the download retried once
+automatically, since YouTube-side changes are the usual cause. If it still fails,
+upgrade manually: `.venv-native/bin/pip install -U yt-dlp`.
+
+**An interrupted download** resumes from where it stopped on the next run; do not
+delete `media/source/` if you want to keep that progress.
+
+**Captions look wrong or missing** — the renderer needs a bold TrueType font. It
+looks for Arial Black, Impact, then DejaVu Sans Bold, and falls back to a default
+face if none is present.
+
+## Repository layout
+
+```
+src/studio/      the native pipeline described above
+src/openclips/   an earlier Docker/PostgreSQL/Redis service with a review
+                 dashboard and publishing queues; independent of src/studio
+web/index.html   the browser UI
+clips/           generated clips (git-ignored)
+media/           downloaded sources, cached by video id (git-ignored)
+```
+
+## Not implemented
+
+Honest about the gaps: no split-screen or multi-speaker layouts, no automatic
+channel polling (a channel URL takes the latest episode only), no direct posting
+to social platforms from the studio pipeline, and no B-roll or zoom effects.
+
+## Licence
+
+Undecided.

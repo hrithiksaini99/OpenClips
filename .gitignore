@@ -14,3 +14,6 @@ data/
 media/
 clips/
 _inspect/
+.DS_Store
+codex-session-01.md
+progress.md
