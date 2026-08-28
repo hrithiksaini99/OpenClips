@@ -329,6 +329,32 @@ def test_instagram_publish_fails_when_public_media_url_is_unavailable(harness: _
     assert transport_calls == []
 
 
+def test_cancel_for_clip_cancels_scheduled_and_queued_only(harness: _Harness) -> None:
+    clip_id = harness.clips.list_all()[0].id
+    scheduled = harness.publications.create(
+        clip_id=clip_id, platform=Platform.YOUTUBE_SHORTS, scheduled_at=FROZEN_NOW
+    )
+    queued = harness.publications.create(
+        clip_id=clip_id, platform=Platform.INSTAGRAM_REELS, scheduled_at=FROZEN_NOW
+    )
+    harness.publications.transition(queued.id, PublicationEvent.ENQUEUE)
+    published = harness.publications.create(
+        clip_id=clip_id, platform=Platform.YOUTUBE_SHORTS, scheduled_at=FROZEN_NOW
+    )
+    harness.publications.transition(published.id, PublicationEvent.ENQUEUE)
+    harness.publications.transition(published.id, PublicationEvent.START)
+    harness.publications.attach_result(
+        published.id, external_id="ext-1", external_url="https://x/ext-1"
+    )
+
+    count = harness.coordinator.cancel_for_clip(clip_id)
+
+    assert count == 2
+    assert harness.publications.get(scheduled.id).status is PublicationStatus.CANCELLED  # type: ignore[union-attr]
+    assert harness.publications.get(queued.id).status is PublicationStatus.CANCELLED  # type: ignore[union-attr]
+    assert harness.publications.get(published.id).status is PublicationStatus.PUBLISHED  # type: ignore[union-attr]
+
+
 def test_backoff_is_exponential_and_capped() -> None:
     assert backoff_seconds(1) == 30
     assert backoff_seconds(2) == 60

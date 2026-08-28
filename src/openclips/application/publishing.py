@@ -139,6 +139,14 @@ class ScheduleCoordinator:
             records.append(self.schedule(clip_id, platform, scheduled_at=slot))
         return records
 
+    def cancel_for_clip(self, clip_id: UUID) -> int:
+        """Cancel a clip's live publications when its content changes.
+
+        Delegates to the repository, so a coordinator built with ``publishers={}``
+        can run this. ``PUBLISHED`` and ``FAILED`` records are never touched.
+        """
+        return self.publications.cancel_active_for_clip(clip_id)
+
     def run(self, job: JobRecord) -> PublicationRecord:
         """Execute one claimed publish job body without touching state."""
         if not job.payload:

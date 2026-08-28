@@ -24,6 +24,7 @@ from openclips.api.schemas import (
 from openclips.application.clipping import ClipSelectionCoordinator
 from openclips.application.ingestion import IngestionCoordinator
 from openclips.application.pipeline import is_known_job_kind
+from openclips.application.publishing import ScheduleCoordinator
 from openclips.application.rendering import RenderCoordinator
 from openclips.application.services import AppServices
 from openclips.application.transcription import TranscriptionCoordinator
@@ -34,6 +35,7 @@ from openclips.domain.jobs import JobStatus
 from openclips.infrastructure.repositories import (
     ClipRepository,
     JobRepository,
+    PublicationRepository,
     SourceRepository,
     TranscriptRepository,
 )
@@ -316,6 +318,15 @@ def build_router(
     ) -> FileResponse:
         return _clip_artifact(clip_id, session, "caption_path")
 
+    def _cancel_live_publications(session: Session, clip_id: UUID) -> None:
+        """Cancel a clip's SCHEDULED/QUEUED publications in this request session."""
+        coordinator = ScheduleCoordinator(
+            clips=ClipRepository(session),
+            publications=PublicationRepository(session),
+            jobs=JobRepository(session),
+        )
+        coordinator.cancel_for_clip(clip_id)
+
     def _apply_edit_event(clips: ClipRepository, clip_id: UUID) -> None:
         try:
             clips.transition(clip_id, ClipEvent.EDIT)
@@ -340,6 +351,7 @@ def build_router(
             clips.set_timespan(
                 clip_id, start_time=body.start_time, end_time=body.end_time
             )
+        _cancel_live_publications(session, clip_id)
         _apply_edit_event(clips, clip_id)
         updated = clips.get(clip_id)
         assert updated is not None
@@ -358,6 +370,7 @@ def build_router(
         clips.set_caption_edits(
             clip_id, [{"match": e.match, "replacement": e.replacement} for e in body.edits]
         )
+        _cancel_live_publications(session, clip_id)
         _apply_edit_event(clips, clip_id)
         updated = clips.get(clip_id)
         assert updated is not None

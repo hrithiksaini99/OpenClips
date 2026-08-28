@@ -454,6 +454,31 @@ class PublicationRepository:
             .all()
         )
 
+    def cancel_active_for_clip(self, clip_id: UUID) -> int:
+        """Cancel every live publication for a clip; return how many changed.
+
+        ``SCHEDULED`` and ``QUEUED`` records receive ``CANCEL``; ``PUBLISHED``,
+        ``FAILED`` and ``CANCELLED`` records are left untouched so published
+        history is never rewritten.
+        """
+        records = (
+            self.session.query(PublicationRecord)
+            .filter(
+                PublicationRecord.clip_id == clip_id,
+                PublicationRecord.status.in_(
+                    (PublicationStatus.SCHEDULED, PublicationStatus.QUEUED)
+                ),
+            )
+            .with_for_update()
+            .all()
+        )
+        for record in records:
+            record.status = PublicationStateMachine.transition(
+                record.status, PublicationEvent.CANCEL
+            )
+        self.session.flush()
+        return len(records)
+
     def transition(
         self,
         publication_id: UUID,
