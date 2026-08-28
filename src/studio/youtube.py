@@ -77,6 +77,15 @@ class NotConnected(YouTubeError):
     """No usable token: the account needs attaching, or re-attaching."""
 
 
+class UploadLimitReached(YouTubeError):
+    """The channel has hit its own daily upload cap.
+
+    Nothing to do with the API quota and not fixable from this end: it is
+    tied to the channel, rolls over 24 hours after each upload, and is raised
+    separately so the queue can wait instead of spending retries on it.
+    """
+
+
 class SetupRequired(YouTubeError):
     """The Google Cloud OAuth client file has not been provided yet."""
 
@@ -119,6 +128,13 @@ def _explain(error: urllib.error.HTTPError, *, context: str = "") -> str:
     if not isinstance(detail, dict):
         return f"Google returned HTTP {error.code}"
     reasons = {item.get("reason", "") for item in detail.get("errors", [])}
+    message = detail.get("message", "")
+    if "uploadLimitExceeded" in reasons or "number of videos they may upload" in message:
+        return (
+            "this channel has hit YouTube's daily upload limit. It is a per-channel "
+            "cap that rolls over 24 hours after each upload, separate from the API "
+            "quota. Verifying the channel at youtube.com/verify raises it."
+        )
     if "youtubeSignupRequired" in reasons:
         return "That Google account has no YouTube channel. Create one, then reconnect."
     if "quotaExceeded" in reasons:
@@ -474,7 +490,10 @@ def upload(
         with urllib.request.urlopen(start, timeout=60) as response:
             session = response.headers.get("Location", "")
     except urllib.error.HTTPError as error:
-        raise YouTubeError(_explain(error)) from None
+        explained = _explain(error)
+        if "daily upload limit" in explained:
+            raise UploadLimitReached(explained) from None
+        raise YouTubeError(explained) from None
     except urllib.error.URLError as error:
         raise YouTubeError(f"Could not reach YouTube: {error.reason}") from None
     if not session:
@@ -529,7 +548,10 @@ def _send(session: str, path: Path, size: int) -> str:
                     attempts += 1
                     time.sleep(2**attempts)  # Google asks for backoff on 5xx
                     continue
-                raise YouTubeError(_explain(error)) from None
+                explained = _explain(error)
+                if "daily upload limit" in explained:
+                    raise UploadLimitReached(explained) from None
+                raise YouTubeError(explained) from None
             except urllib.error.URLError as error:
                 if attempts < 3:
                     attempts += 1

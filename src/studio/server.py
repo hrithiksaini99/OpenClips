@@ -377,6 +377,7 @@ def get_queue() -> dict[str, Any]:
         "posted_today": publisher.posted_today(board.queue, datetime.now()),
         "daily_limit": publisher._daily_limit(board.schedule),
         "last_error": board.last_error,
+        "paused_until": board.paused_until,
     }
 
 

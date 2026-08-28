@@ -33,6 +33,10 @@ CATCHUP_GRACE = timedelta(hours=2)
 # videos.insert bills to its own quota bucket: 1 unit a call, 100 calls a day.
 DAILY_CAP = 100
 MAX_ATTEMPTS = 3
+# How long to stand down after the channel's own daily upload cap. That window
+# rolls per upload rather than resetting at midnight, so capacity trickles back
+# and there is nothing to gain from hammering it.
+LIMIT_BACKOFF = timedelta(hours=2)
 
 _lock = threading.RLock()
 
@@ -95,6 +99,7 @@ class Board:
     queue: list[Entry] = field(default_factory=list)
     claimed: list[str] = field(default_factory=list)  # slot keys already fired
     last_error: str = ""
+    paused_until: float = 0.0  # set when the channel's own upload cap is hit
 
 
 def _only_known(payload: dict, cls: type) -> dict:
@@ -120,6 +125,7 @@ def load() -> Board:
         queue=[Entry(**_only_known(item, Entry)) for item in payload.get("queue", [])],
         claimed=list(payload.get("claimed", []))[-64:],
         last_error=payload.get("last_error", ""),
+        paused_until=float(payload.get("paused_until", 0.0)),
     )
 
 
@@ -132,6 +138,7 @@ def save(board: Board) -> None:
             "queue": [asdict(entry) for entry in board.queue],
             "claimed": board.claimed[-64:],
             "last_error": board.last_error,
+            "paused_until": board.paused_until,
         },
     )
 
@@ -328,6 +335,10 @@ def claim_now(entry_id: str) -> Entry:
         raise youtube.NotConnected("Connect a YouTube account first")
     with _lock:
         board = load()
+        if board.paused_until > time.time():
+            wait = datetime.fromtimestamp(board.paused_until).strftime("%H:%M")
+            raise RuntimeError(
+                f"YouTube's daily upload limit for this channel was reached; waiting until {wait}")
         if posted_today(board.queue, datetime.now()) >= DAILY_CAP:
             raise RuntimeError(f"YouTube's cap of {DAILY_CAP} uploads a day is used up")
         for entry in board.queue:
@@ -357,6 +368,10 @@ def claim_batch(limit: int | None = None) -> list[str]:
         raise youtube.NotConnected("Connect a YouTube account first")
     with _lock:
         board = load()
+        if board.paused_until > time.time():
+            wait = datetime.fromtimestamp(board.paused_until).strftime("%H:%M")
+            raise RuntimeError(
+                f"YouTube's daily upload limit for this channel was reached; waiting until {wait}")
         room = DAILY_CAP - posted_today(board.queue, datetime.now())
         if room <= 0:
             raise RuntimeError(f"YouTube's cap of {DAILY_CAP} uploads a day is used up")
@@ -378,7 +393,8 @@ def claim_batch(limit: int | None = None) -> list[str]:
         return claimed
 
 
-def _finish(entry_id: str, *, video_id: str = "", error: str = "", note: str = "") -> None:
+def _finish(entry_id: str, *, video_id: str = "", error: str = "", note: str = "",
+            limited: bool = False) -> None:
     with _lock:
         board = load()
         for entry in board.queue:
@@ -396,6 +412,12 @@ def _finish(entry_id: str, *, video_id: str = "", error: str = "", note: str = "
                     entry.job_id, entry.clip_id, video_id,
                     drop_file=board.storage.delete_clip_after_post,
                 )
+            elif limited:
+                # Not this clip's fault, and not something a retry fixes, so it
+                # costs no attempt: the whole queue stands down and tries later.
+                entry.status = "pending"
+                entry.error = error
+                board.paused_until = time.time() + LIMIT_BACKOFF.total_seconds()
             else:
                 entry.attempts += 1
                 entry.error = error
@@ -510,6 +532,8 @@ class Scheduler:
             board = load()
             if not board.schedule.enabled or not youtube.connected():
                 return None
+            if board.paused_until > now.timestamp():
+                return None
             if posted_today(board.queue, now) >= _daily_limit(board.schedule):
                 return None
             slot = due_slot(board.schedule, board.claimed, now)
@@ -534,11 +558,18 @@ class Scheduler:
         Sequential on purpose: parallel uploads to one channel invite throttling,
         and a clip that fails should not take the rest of the batch with it.
         """
-        for entry_id in entry_ids:
+        for index, entry_id in enumerate(entry_ids):
             try:
                 self._post(entry_id)
             except Exception as error:
                 _finish(entry_id, error=f"{type(error).__name__}: {error}")
+            if load().paused_until > time.time():
+                # The cap applies to every clip behind this one too, so release
+                # the rest of the batch rather than failing them one at a time.
+                for waiting in entry_ids[index + 1:]:
+                    _finish(waiting, limited=True,
+                            error="Waiting: the channel's daily upload limit was reached.")
+                return
 
     def _post(self, entry_id: str) -> None:
         entry = find(entry_id)
@@ -559,6 +590,9 @@ class Scheduler:
                 category_id=schedule.category_id,
                 made_for_kids=schedule.made_for_kids,
             )
+        except youtube.UploadLimitReached as error:
+            _finish(entry_id, error=f"Waiting: {error}", limited=True)
+            return
         except Exception as error:
             _finish(entry_id, error=f"{type(error).__name__}: {error}")
             return

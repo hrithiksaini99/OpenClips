@@ -230,6 +230,23 @@ fold away into a summary that keeps their links. Titles are
 editable in place; click one and type. A failed upload retries at the next slot
 and parks itself after three attempts with the reason shown.
 
+### Two different limits
+
+They get confused because both look like "you can't upload any more":
+
+- **The API quota** belongs to your Google Cloud project: `videos.insert` costs
+  1 unit in its own bucket, 100 calls a day. You will not reach it.
+- **The channel's upload limit** belongs to your YouTube channel and is much
+  lower — often around a dozen a day for a new or unverified one. YouTube does
+  not publish the number, it varies with the channel's age and standing, and it
+  rolls over 24 hours after each upload rather than resetting at midnight.
+  Verifying at [youtube.com/verify](https://www.youtube.com/verify) raises it.
+  Nothing on the API side changes it; it is not a quota you can request more of.
+
+Hitting the channel limit is treated as a wait, not a failure: the clip keeps
+its file, spends none of its three retries, and the whole queue stands down for
+two hours before trying again.
+
 A slot only fires while the server is running. If the machine was asleep at
 09:00 the clip still posts when it wakes, but only within two hours of the slot
 — otherwise starting the app in the evening would fire the whole day at once.

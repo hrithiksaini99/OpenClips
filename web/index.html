@@ -688,10 +688,14 @@ function renderSchedule() {
   const today = board.posted_today >= board.daily_limit
     ? `Done for today (${board.posted_today} posted)`
     : `${board.posted_today} of ${board.daily_limit} posted today`;
-  const state = schedule.enabled ? `${today}${next ? ` · next ${whenLabel(next)}` : ''}` : 'Not running';
+  const paused = (board.paused_until || 0) * 1000 > Date.now();
+  const state = paused
+    ? `Waiting — the channel's daily upload limit was reached`
+    : schedule.enabled ? `${today}${next ? ` · next ${whenLabel(next)}` : ''}` : 'Not running';
   $('schedCard').innerHTML = `
     <div class="row">
-      <div><div class="acct-name">Schedule</div><div class="acct-sub">${state}</div></div>
+      <div><div class="acct-name">Schedule</div>
+        <div class="acct-sub"${paused ? ' style="color:var(--accent)"' : ''}>${state}</div></div>
       <label class="switch" title="Arm the schedule">
         <input type="checkbox" id="armed" ${schedule.enabled ? 'checked' : ''} /><span></span></label>
     </div>
