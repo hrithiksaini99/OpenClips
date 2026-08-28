@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from openclips.api.publishing_routes import add_publishing_routes
 from openclips.api.schemas import (
     BulkActionBody,
     BulkResultItem,
@@ -477,5 +478,12 @@ def build_router(
             "</body></html>"
         )
         return HTMLResponse(content=html)
+
+    add_publishing_routes(
+        router,
+        get_session=get_session,
+        require_admin=require_admin,
+        services=services,
+    )
 
     return router
