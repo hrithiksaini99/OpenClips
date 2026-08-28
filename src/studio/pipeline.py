@@ -560,6 +560,8 @@ def _render_one(payload: dict[str, Any]) -> dict[str, Any]:
     # Built from the original episode rather than the render: the render has
     # captions burned in, which read as clutter behind the thumbnail's own text.
     poster = Path(payload["destination"]).with_name(Path(payload["destination"]).stem + "-yt.jpg")
+    if not payload.get("make_poster"):
+        return {"id": payload["id"], "thumbnail": thumbnail.name, "poster": ""}
     try:
         build_thumbnail(
             Path(payload["source"]),
@@ -636,6 +638,7 @@ def run_job(
     face_track: bool = True,
     use_llm: bool = True,
     delete_source: bool = False,
+    make_thumbnails: bool = False,
 ) -> JobState:
     """Take a URL or local file all the way to rendered clips on disk."""
     directory = job_dir(job_id)
@@ -725,6 +728,7 @@ def run_job(
                     "words": window,
                     "style": asdict(CaptionStyle()),
                     "face_track": face_track,
+                    "make_poster": make_thumbnails,
                 }
             )
             records[clip_id] = ClipRecord(
@@ -812,12 +816,19 @@ def mark_published(job_id: str, clip_id: str, video_id: str, *, drop_file: bool)
             continue
         clip.video_id = video_id
         if drop_file:
-            path = job_dir(job_id) / clip.file
-            try:
-                freed = path.stat().st_size
-                path.unlink()
-            except OSError:
-                freed = 0
+            # The clip lives on YouTube now, so nothing local is worth keeping:
+            # the render, its poster and its still all go, and the record goes
+            # with them so the results grid stops listing a clip that is gone.
+            for name in (clip.file, clip.thumbnail, clip.poster):
+                if not name:
+                    continue
+                path = job_dir(job_id) / name
+                try:
+                    freed += path.stat().st_size
+                    path.unlink()
+                except OSError:
+                    continue
+            state.clips = [other for other in state.clips if other.id != clip_id]
         write_state(state)
         break
     return freed

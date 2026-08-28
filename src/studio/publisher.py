@@ -83,6 +83,10 @@ class Storage:
 
     delete_source_after_render: bool = True
     delete_clip_after_post: bool = True
+    # Off by default: a channel that has not been phone-verified cannot set
+    # custom thumbnails, so generating them would be work for a file YouTube
+    # will refuse. Turn it on once youtube.com/verify is done.
+    custom_thumbnails: bool = False
 
 
 @dataclass
@@ -336,6 +340,39 @@ def claim_now(entry_id: str) -> Entry:
     raise LookupError("Entry not found")
 
 
+def claim_batch(limit: int | None = None) -> list[str]:
+    """Reserve every waiting entry for an immediate publish.
+
+    Claimed in one pass under the lock so a scheduler tick landing mid-batch
+    cannot pick up an entry this batch is about to post. The daily cap is
+    YouTube's real one rather than the schedule's pacing limit, which is a
+    preference and not a rule.
+    """
+    if not youtube.connected():
+        raise youtube.NotConnected("Connect a YouTube account first")
+    with _lock:
+        board = load()
+        room = DAILY_CAP - posted_today(board.queue, datetime.now())
+        if room <= 0:
+            raise RuntimeError(f"YouTube's cap of {DAILY_CAP} uploads a day is used up")
+        if limit is not None:
+            room = min(room, max(0, limit))
+        claimed: list[str] = []
+        for entry in board.queue:
+            if len(claimed) >= room:
+                break
+            if entry.status not in ("pending", "failed"):
+                continue
+            entry.status = "uploading"
+            entry.error = ""
+            entry.attempts = 0
+            claimed.append(entry.id)
+        if not claimed:
+            raise RuntimeError("Nothing in the queue is waiting to be posted")
+        save(board)
+        return claimed
+
+
 def _finish(entry_id: str, *, video_id: str = "", error: str = "", note: str = "") -> None:
     with _lock:
         board = load()
@@ -438,11 +475,24 @@ class Scheduler:
         """Upload one already-claimed entry. Used by the tick and by Publish now."""
         self._post(entry_id)
 
+    def post_batch(self, entry_ids: list[str]) -> None:
+        """Upload a claimed batch, one at a time.
+
+        Sequential on purpose: parallel uploads to one channel invite throttling,
+        and a clip that fails should not take the rest of the batch with it.
+        """
+        for entry_id in entry_ids:
+            try:
+                self._post(entry_id)
+            except Exception as error:
+                _finish(entry_id, error=f"{type(error).__name__}: {error}")
+
     def _post(self, entry_id: str) -> None:
         entry = find(entry_id)
         if entry is None:
             return
-        schedule = load().schedule
+        board = load()
+        schedule, schedule_storage = board.schedule, board.storage
         path = pipeline.job_dir(entry.job_id) / entry.file
         try:
             if not path.is_file():
@@ -462,15 +512,16 @@ class Scheduler:
         # Cosmetic, and commonly refused, so it happens after the upload is
         # already banked and never turns a posted clip into a failed one.
         note = ""
-        clip = pipeline.read_state(entry.job_id)
-        record = next((c for c in clip.clips if c.id == entry.clip_id), None) if clip else None
-        if record and record.poster:
-            poster = pipeline.job_dir(entry.job_id) / record.poster
-            if poster.is_file():
-                try:
-                    youtube.set_thumbnail(video_id, poster)
-                except Exception as error:
-                    note = f"Posted, but the thumbnail was refused: {error}"
+        if schedule_storage.custom_thumbnails:
+            clip = pipeline.read_state(entry.job_id)
+            record = next((c for c in clip.clips if c.id == entry.clip_id), None) if clip else None
+            if record and record.poster:
+                poster = pipeline.job_dir(entry.job_id) / record.poster
+                if poster.is_file():
+                    try:
+                        youtube.set_thumbnail(video_id, poster)
+                    except Exception as error:
+                        note = f"Posted, but the thumbnail was refused: {error}"
         _finish(entry_id, video_id=video_id, note=note)
 
 

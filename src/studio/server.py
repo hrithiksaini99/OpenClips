@@ -67,6 +67,7 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
     pipeline.write_state(state)
 
     def run() -> None:
+        storage = publisher.load().storage
         finished = pipeline.run_job(
             job_id=job_id,
             source=source,
@@ -77,7 +78,8 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
             face_track=request.face_track,
             use_llm=request.use_llm,
             transcript_path=Path(request.transcript) if request.transcript else None,
-            delete_source=publisher.load().storage.delete_source_after_render,
+            delete_source=storage.delete_source_after_render,
+            make_thumbnails=storage.custom_thumbnails,
         )
         _running.pop(job_id, None)
         # Writing a post calls the model once per clip, so it happens here on
@@ -303,6 +305,7 @@ class ScheduleUpdate(BaseModel):
     enabled: bool | None = None
     delete_source_after_render: bool | None = None
     delete_clip_after_post: bool | None = None
+    custom_thumbnails: bool | None = None
     slots: list[str] | None = None
     privacy: str | None = None
     category_id: str | None = None
@@ -401,6 +404,19 @@ def delete_queue(entry_id: str) -> dict[str, str]:
     if not publisher.remove(entry_id):
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"status": "removed"}
+
+
+@api.post("/queue/publish-all")
+def publish_all(background: BackgroundTasks) -> dict[str, Any]:
+    """Post everything waiting in the queue, now."""
+    try:
+        claimed = publisher.claim_batch()
+    except youtube.NotConnected as error:
+        raise HTTPException(status_code=428, detail=str(error)) from None
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    background.add_task(publisher.scheduler.post_batch, claimed)
+    return {"claimed": len(claimed)}
 
 
 @api.post("/queue/{entry_id}/publish")

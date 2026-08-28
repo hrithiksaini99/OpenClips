@@ -221,7 +221,11 @@ The **Schedule** card holds the controls:
 - **The arm toggle** — nothing is posted until you turn this on. It is off by
   default and stays off across restarts until you change it.
 
-The **Queue** shows what is waiting and when each clip goes up. Titles are
+**Publish all** posts everything waiting immediately, one upload at a time, and
+carries on past any clip that fails rather than stopping the batch.
+
+The **Queue** shows what is waiting and when each clip goes up. Posted entries
+fold away into a summary that keeps their links. Titles are
 editable in place; click one and type. A failed upload retries at the next slot
 and parks itself after three attempts with the reason shown.
 
@@ -238,26 +242,31 @@ controls two clean-ups, both on by default:
 - **Delete the episode once clips are made** — frees the ~2.9 GB source as soon
   as every clip has rendered. The cost is that re-running that episode
   re-downloads it in full, since this is the same cache that made re-runs free.
-- **Delete a clip once it is posted** — frees the MP4 after YouTube confirms the
-  upload. The thumbnail is kept, so the clip still appears in the grid with a
-  link to the video.
+- **Delete a clip once it is posted** — once YouTube confirms the upload, the
+  render and its images are removed and the clip leaves the results grid. It is
+  on YouTube; the queue keeps the link under "already posted".
 
 Neither ever touches a local file you pointed the app at, and neither runs on a
 job that failed.
 
 ## Thumbnails
 
-Every clip gets a 1280x720 thumbnail: a frame from the original episode with the
+Off by default, because a channel that has not been phone-verified cannot set
+custom thumbnails and generating them would be work for a file YouTube refuses.
+Verify at [youtube.com/verify](https://www.youtube.com/verify), then turn
+**Make custom thumbnails** on in the Storage card. With it off, no thumbnail is
+built during rendering at all.
+
+With it on, every clip gets a 1280x720 thumbnail: a frame from the original episode with the
 hook drawn across it. The frame comes from the source rather than the rendered
 clip, because the render has captions burned in and they read as clutter behind
 the thumbnail's own text.
 
-It is offered to YouTube with `thumbnails.set` after the upload lands. Expect
-this to be refused at first: custom thumbnails need a phone-verified channel,
-Shorts thumbnails additionally need Partner Programme membership, and YouTube's
-July 2026 rollout describes Shorts thumbnails as a Studio feature, so the API
-may decline them for now. A refusal is recorded against the queue entry and
-never fails the post.
+It is offered to YouTube with `thumbnails.set` after the upload lands. Even on a
+verified channel this can still be refused: Shorts thumbnails additionally need
+Partner Programme membership, and YouTube's July 2026 rollout describes them as
+a Studio feature, so the API may decline them for now. A refusal is recorded
+against the queue entry and never fails the post.
 
 Worth knowing either way: a Shorts thumbnail never shows in the vertical Shorts
 feed. It shows in search, the channel grid, the Shorts shelf and subscriptions.
