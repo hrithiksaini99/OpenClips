@@ -98,13 +98,79 @@ def list_jobs() -> list[JobState]:
     return found
 
 
-def download(url: str, destination: Path, hook: ProgressHook) -> Path:
-    """Fetch a single video with yt-dlp, best quality merged to mp4."""
-    hook("download", 0.05, "Downloading source video…")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+# A bare "youtube.com/watch?v=…" is a URL a user pasted without the scheme, not
+# a relative file path; treating it as a path produced a confusing "file not
+# found" against the project directory.
+_URL_LIKE = re.compile(r"^(?:https?://)?(?:[\w-]+\.)*(?:youtube\.com|youtu\.be)/", re.IGNORECASE)
+# Channel, user and playlist locators expand to every video they contain, which
+# yt-dlp will happily download for hours; they must be resolved to one episode.
+_COLLECTION_MARKERS = ("/@", "/channel/", "/c/", "/user/", "/playlist", "/videos", "/streams")
+_PROGRESS = re.compile(r"\[download\]\s+([\d.]+)%")
+
+
+def normalize_source(raw: str) -> str:
+    """Add the missing scheme to a bare YouTube link so it is treated as a URL."""
+    source = raw.strip()
+    if source.startswith(("http://", "https://")):
+        return source
+    if _URL_LIKE.match(source):
+        return "https://" + source.lstrip("/")
+    return source
+
+
+def is_remote(source: str) -> bool:
+    return source.startswith(("http://", "https://"))
+
+
+def is_collection(url: str) -> bool:
+    """True when the URL names a channel or playlist rather than one video."""
+    if "watch?v=" in url or "youtu.be/" in url:
+        return False
+    return any(marker in url for marker in _COLLECTION_MARKERS)
+
+
+def resolve_episode(url: str, hook: ProgressHook) -> str:
+    """Expand a channel/playlist URL to its most recent video URL."""
+    hook("resolve", 0.02, "Reading channel for the latest episode…")
+    completed = subprocess.run(
         [
-            binary("yt-dlp"), "--no-progress", "--newline",
+            binary("yt-dlp"), "--flat-playlist", "--playlist-end", "1",
+            "--print", "%(id)s\t%(title)s", "--", url,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    line = completed.stdout.strip().splitlines()
+    if not line:
+        raise RuntimeError(f"No videos found at {url}")
+    video_id, _, title = line[0].partition("\t")
+    hook("resolve", 0.04, f"Latest episode: {title[:70]}")
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def video_title(url: str) -> str:
+    """Look up a video's title so jobs are listed by episode, not by id."""
+    try:
+        completed = subprocess.run(
+            [binary("yt-dlp"), "--skip-download", "--print", "%(title)s", "--no-playlist", "--", url],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        return completed.stdout.strip().splitlines()[0][:120]
+    except Exception:
+        return ""
+
+
+def download(url: str, destination: Path, hook: ProgressHook) -> Path:
+    """Fetch one video with yt-dlp, reporting real download progress."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    process = subprocess.Popen(
+        [
+            binary("yt-dlp"), "--newline", "--no-playlist",
             "-f", "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]",
             "--merge-output-format", "mp4",
             # yt-dlp shells out to FFmpeg to merge the streams, and it searches
@@ -112,11 +178,21 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
             "--ffmpeg-location", binary("ffmpeg"),
             "-o", str(destination), "--", url,
         ],
-        check=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
-        timeout=7200,
+        bufsize=1,
     )
+    tail: list[str] = []
+    assert process.stdout is not None
+    for line in process.stdout:
+        tail = (tail + [line.rstrip()])[-12:]
+        match = _PROGRESS.search(line)
+        if match:
+            share = float(match.group(1)) / 100.0
+            hook("download", 0.05 + share * 0.06, f"Downloading source… {share * 100:.0f}%")
+    if process.wait() != 0:
+        raise RuntimeError("yt-dlp failed:\n" + "\n".join(tail))
     return destination
 
 
@@ -277,13 +353,18 @@ def run_job(
         hook(stage, progress, message)
 
     try:
-        if source.startswith(("http://", "https://")):
+        source = normalize_source(source)
+        state.source = source
+        if is_remote(source):
+            if is_collection(source):
+                source = resolve_episode(source, report)
+            state.title = video_title(source)
             video = download(source, MEDIA_DIR / "source" / f"{job_id}.mp4", report)
         else:
             video = Path(source).expanduser().resolve()
             if not video.is_file():
                 raise FileNotFoundError(f"Source file not found: {video}")
-        state.title = video.stem
+        state.title = state.title or video.stem
 
         if transcript_path is not None:
             report("transcribe", 0.55, "Loading existing transcript…")
