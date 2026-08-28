@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     max_concurrent_renders: int = Field(default=1, ge=1)
     outbox_batch_size: int = Field(default=50, ge=1, le=1000)
     outbox_backoff_cap_seconds: int = Field(default=300, ge=1)
+    schedule_poll_interval_seconds: float = Field(default=30.0, gt=0)
     transcription_model_size: str = "base"
     transcription_device: str = "cpu"
     transcription_compute_type: str = "int8"

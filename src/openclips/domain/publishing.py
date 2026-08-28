@@ -25,24 +25,39 @@ class Platform(StrEnum):
 
 class PublicationStatus(StrEnum):
     SCHEDULED = "SCHEDULED"
+    QUEUED = "QUEUED"
     PUBLISHING = "PUBLISHING"
     PUBLISHED = "PUBLISHED"
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class PublicationEvent(StrEnum):
+    ENQUEUE = "ENQUEUE"
     START = "START"
     SUCCEED = "SUCCEED"
     FAIL = "FAIL"
     RETRY = "RETRY"
+    CANCEL = "CANCEL"
 
 
 class PublicationStateMachine:
+    """Dispatch is a distinct state: only a QUEUED publication may start.
+
+    ``ENQUEUE`` is what a scheduler poll commits alongside the outbox row, so a
+    publication that already owns a queued job can never be handed out twice.
+    ``CANCEL`` is available up to the moment a worker starts the attempt.
+    """
+
     _transitions = {
-        (PublicationStatus.SCHEDULED, PublicationEvent.START): PublicationStatus.PUBLISHING,
+        (PublicationStatus.SCHEDULED, PublicationEvent.ENQUEUE): PublicationStatus.QUEUED,
+        (PublicationStatus.QUEUED, PublicationEvent.START): PublicationStatus.PUBLISHING,
         (PublicationStatus.PUBLISHING, PublicationEvent.SUCCEED): PublicationStatus.PUBLISHED,
         (PublicationStatus.PUBLISHING, PublicationEvent.FAIL): PublicationStatus.FAILED,
         (PublicationStatus.FAILED, PublicationEvent.RETRY): PublicationStatus.SCHEDULED,
+        (PublicationStatus.SCHEDULED, PublicationEvent.CANCEL): PublicationStatus.CANCELLED,
+        (PublicationStatus.QUEUED, PublicationEvent.CANCEL): PublicationStatus.CANCELLED,
+        (PublicationStatus.FAILED, PublicationEvent.CANCEL): PublicationStatus.CANCELLED,
     }
 
     @classmethod

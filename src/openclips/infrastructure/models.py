@@ -97,6 +97,7 @@ class ClipRecord(Base):
 
 class PublicationRecord(Base):
     __tablename__ = "publication_records"
+    __table_args__ = (Index("ix_publication_records_due", "status", "scheduled_at"),)
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     clip_id: Mapped[UUID] = mapped_column(ForeignKey("clips.id"), index=True)

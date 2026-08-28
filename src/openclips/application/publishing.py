@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from uuid import UUID
 
-from openclips.application.pipeline import queue_for_job_kind
 from openclips.domain.clips import ClipEvent, ClipStatus
 from openclips.domain.jobs import JobEvent, JobStatus  # noqa: F401
 from openclips.domain.publishing import (
     MAX_PUBLICATION_ATTEMPTS,
     Platform,
     PublicationEvent,
+    PublicationStatus,
     can_retry,
     next_retry_at,
 )
@@ -77,6 +77,9 @@ class ScheduleCoordinator:
     Each platform owns an independent queue and job kind. Failures preserve
     state and reason on the publication record and reschedule deterministically
     within the bounded attempt budget.
+
+    ``publishers`` and ``storage`` are only needed to run an attempt, so a
+    dispatch-only coordinator (see ``PublicationScheduler``) may omit them.
     """
 
     def __init__(
@@ -85,15 +88,15 @@ class ScheduleCoordinator:
         clips: ClipRepository,
         publications: PublicationRepository,
         jobs: JobRepository,
-        publishers: dict[Platform, PlatformPublisher],
-        storage: MediaStorage,
+        publishers: dict[Platform, PlatformPublisher] | None = None,
+        storage: MediaStorage | None = None,
         clock: Callable[[], datetime] | None = None,
         media_url_provider: PublicMediaUrlProvider | None = None,
     ) -> None:
         self.clips = clips
         self.publications = publications
         self.jobs = jobs
-        self.publishers = publishers
+        self.publishers = publishers if publishers is not None else {}
         self.storage = storage
         self._clock = clock or (lambda: datetime.now(UTC))
         self._media_url_provider = media_url_provider
@@ -144,8 +147,16 @@ class ScheduleCoordinator:
         return self.publish_publication(UUID(job.payload))
 
     def publish_publication(self, publication_id: UUID) -> PublicationRecord:
-        """Attempt one publication; failures reschedule with bounded backoff."""
+        """Attempt one QUEUED publication; failures reschedule with bounded backoff.
+
+        A publication cancelled after its job was queued is returned untouched so
+        the redelivered message can be acknowledged without reaching the platform.
+        Any other non-``QUEUED`` status raises ``InvalidTransitionError``.
+        """
         record = self._get(publication_id)
+        if record.status is PublicationStatus.CANCELLED:
+            logger.info("Skipping cancelled publication %s", record.id)
+            return record
         self.publications.transition(record.id, PublicationEvent.START)
         publisher = self.publishers.get(record.platform)
         if publisher is None:
@@ -182,14 +193,21 @@ class ScheduleCoordinator:
             record.id, next_retry_at(self._clock(), record.attempts)
         )
 
-    def enqueue_due(self) -> list[JobRecord]:
-        """Create jobs for every due publication on its platform queue."""
+    def enqueue_due(self, *, limit: int = 50) -> list[JobRecord]:
+        """Queue every due publication once, on its own platform queue.
+
+        Claiming, the ``ENQUEUE`` transition and the outbox row all belong to the
+        caller's single transaction: a poll that commits has moved each record out
+        of ``SCHEDULED``, so a later poll cannot enqueue it again, and a poll that
+        rolls back leaves no job behind.
+        """
         jobs: list[JobRecord] = []
-        for record in self.publications.due(self._clock()):
+        for record in self.publications.claim_due(self._clock(), limit):
+            self.publications.transition(record.id, PublicationEvent.ENQUEUE)
             job, _event = self.jobs.create_dispatched(
                 record.platform.job_kind,
                 payload=str(record.id),
-                queue_name=queue_for_job_kind(record.platform.job_kind),
+                queue_name=record.platform.job_kind,
             )
             jobs.append(job)
         return jobs
@@ -201,6 +219,9 @@ class ScheduleCoordinator:
         return record
 
     def _request_for(self, record: PublicationRecord) -> PublishRequest:
+        if self.storage is None:
+            msg = "This coordinator was built for dispatch only and cannot read clip media"
+            raise PublishError(msg)
         clip = self.clips.get(record.clip_id)
         if clip is None or not clip.output_path:
             msg = f"Clip {record.clip_id} has no rendered media to publish"

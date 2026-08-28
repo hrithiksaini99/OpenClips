@@ -5,6 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from threading import BoundedSemaphore, Event, Thread
+from time import monotonic
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -16,6 +17,7 @@ from openclips.application.dispatch import OutboxRelay
 from openclips.application.health import make_database_probe
 from openclips.application.pipeline import KNOWN_JOB_KINDS
 from openclips.application.rendering import RENDER_CLIP_JOB_KIND, RenderCoordinator
+from openclips.application.scheduler import PublicationScheduler
 from openclips.application.transcription import TRANSCRIBE_JOB_KIND, TranscriptionCoordinator
 from openclips.application.youtube_ingestion import (
     INGEST_YOUTUBE_JOB_KIND,
@@ -410,6 +412,12 @@ def run() -> None:
         backoff_cap_seconds=settings.outbox_backoff_cap_seconds,
     )
 
+    scheduler = PublicationScheduler(
+        session_factory=session_factory,
+        clock=lambda: datetime.now(UTC),
+        poll_interval_seconds=settings.schedule_poll_interval_seconds,
+    )
+
     probe = make_database_probe(engine)
     probe()
     recover_startup_state(session_factory=session_factory, queue=queue)
@@ -422,11 +430,19 @@ def run() -> None:
     pool = ThreadPoolExecutor(max_workers=settings.worker_concurrency)
     permits = BoundedSemaphore(settings.worker_concurrency)
 
-    def _pump_relay() -> None:
+    def _pump_background() -> None:
+        """Drain the outbox every tick and poll for due publications on its own interval."""
+        next_schedule_poll = 0.0
         while not stop_event.wait(0.5):
             relay.dispatch_once()
+            if monotonic() >= next_schedule_poll:
+                next_schedule_poll = monotonic() + scheduler.poll_interval_seconds
+                try:
+                    scheduler.dispatch_once()
+                except Exception:
+                    logger.exception("Publication scheduler poll failed")
 
-    relay_thread = Thread(target=_pump_relay, name="outbox-relay", daemon=True)
+    relay_thread = Thread(target=_pump_background, name="outbox-relay", daemon=True)
     relay_thread.start()
     try:
         run_claim_loop(
