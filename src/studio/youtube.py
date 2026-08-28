@@ -218,6 +218,16 @@ def adopt_client(path: str) -> dict[str, str]:
         raise SetupRequired(f"{source.name} is not valid JSON") from None
 
 
+def _get(url: str) -> dict:
+    """Authorised GET against the Data API."""
+    request = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token()}"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        raise YouTubeError(_explain(error)) from None
+
+
 def client_config() -> dict[str, str]:
     """The OAuth client to authorise against: the user's, or the bundled one."""
     if CLIENT_SECRET.is_file():
@@ -555,3 +565,35 @@ def set_thumbnail(video_id: str, image: Path) -> None:
         raise YouTubeError(_explain(error, context="thumbnail")) from None
     except urllib.error.URLError as error:
         raise YouTubeError(f"Could not reach YouTube: {error.reason}") from None
+
+
+def recent_uploads(limit: int = 50) -> dict[str, str]:
+    """Map recent video titles on the channel to their ids.
+
+    Used to work out whether an interrupted upload actually landed. Costs two
+    quota units against the 10,000-a-day pool.
+    """
+    channels = urllib.parse.urlencode({"part": "contentDetails", "mine": "true"})
+    payload = _get(f"{CHANNELS_ENDPOINT}?{channels}")
+    items = payload.get("items") or []
+    if not items:
+        return {}
+    playlist = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    query = urllib.parse.urlencode(
+        {"part": "snippet", "maxResults": min(limit, 50), "playlistId": playlist}
+    )
+    listing = _get(f"https://www.googleapis.com/youtube/v3/playlistItems?{query}")
+    found: dict[str, str] = {}
+    stamped: dict[str, tuple[str, str]] = {}
+    for item in listing.get("items", []):
+        snippet = item.get("snippet", {})
+        title = snippet.get("title", "")
+        if not title:
+            continue
+        published = snippet.get("publishedAt", "")
+        # The listing arrives newest-first, so keep the oldest id for a title:
+        # if a clip was somehow posted twice, reconciling should point at the
+        # original rather than adopt the accidental copy.
+        if title not in stamped or published < stamped[title][0]:
+            stamped[title] = (published, snippet.get("resourceId", {}).get("videoId", ""))
+    return {title: video_id for title, (_at, video_id) in stamped.items()}

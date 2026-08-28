@@ -35,6 +35,10 @@ async def lifespan(_app: FastAPI):
     # The scheduler only posts when it is armed in the UI, which it never is by
     # default; starting the thread here just means an armed schedule survives a
     # restart without anyone having to press anything.
+    # Anything left "uploading" belongs to a process that is no longer running.
+    recovered = publisher.recover_stalled()
+    if recovered:
+        publisher.note_error(f"{recovered} interrupted upload(s) returned to the queue")
     publisher.scheduler.start()
     yield
     publisher.scheduler.stop()

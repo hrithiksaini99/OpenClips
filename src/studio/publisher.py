@@ -407,6 +407,54 @@ def _finish(entry_id: str, *, video_id: str = "", error: str = "", note: str = "
         save(board)
 
 
+def recover_stalled() -> int:
+    """Put entries stranded mid-upload back in the queue. Returns how many.
+
+    An entry is claimed as "uploading" before its upload starts, so a tick that
+    lands mid-click cannot post it twice. Nothing released that claim if the
+    process then died, which left a restart or a crash stranding those entries
+    permanently: the scheduler skips them, a batch skips them, and a manual
+    publish refuses them as already in flight.
+
+    If this process is only starting now, nothing it owns is uploading, so any
+    entry still in that state belongs back in the queue. There is a narrow
+    window where an upload completed and the process died before the result was
+    written, which would repost that one clip; stranding every interrupted
+    entry for good is the worse of the two.
+    """
+    with _lock:
+        board = load()
+        stalled = [entry for entry in board.queue if entry.status == "uploading"]
+        if not stalled:
+            return 0
+        # Ask YouTube what actually landed before assuming none of it did.
+        # Re-queueing blind is how an interrupted batch became a duplicate
+        # upload: the clips had reached YouTube, only the result was never
+        # written down.
+        try:
+            live = youtube.recent_uploads()
+        except Exception:
+            live = {}
+        requeued = 0
+        for entry in stalled:
+            video_id = live.get(entry.title, "")
+            if video_id:
+                entry.status = "posted"
+                entry.video_id = video_id
+                entry.posted_at = entry.posted_at or time.time()
+                entry.error = ""
+                entry.freed = pipeline.mark_published(
+                    entry.job_id, entry.clip_id, video_id,
+                    drop_file=board.storage.delete_clip_after_post,
+                )
+            else:
+                entry.status = "pending"
+                entry.error = ""
+                requeued += 1
+        save(board)
+        return requeued
+
+
 def note_error(message: str) -> None:
     """Record a failure that happened outside a tick, so the UI can show it."""
     with _lock:
