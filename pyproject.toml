@@ -78,6 +78,14 @@ plugins = ["sqlalchemy.ext.mypy.plugin"]
 module = "studio.*"
 warn_return_any = false
 disallow_any_generics = false
+# The studio runtime dependencies are deliberately not installed in CI, so an
+# ignore that is required locally is redundant there. Failing over that would
+# make the check pass or fail on which machine it ran.
+warn_unused_ignores = false
+
+# Media and system libraries that ship no stubs.
+[[tool.mypy.overrides]]
+module = ["PIL.*", "cv2", "cv2.*", "psutil", "faster_whisper.*", "numpy.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
