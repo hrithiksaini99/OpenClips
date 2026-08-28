@@ -41,7 +41,7 @@
   .progress { margin-top: 16px; display: none; }
   .progress.on { display: block; }
   .bar { height: 6px; background: #0e1216; border-radius: 999px; overflow: hidden; }
-  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+  .bar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .6s ease-out; }
   .status { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; margin-top: 26px; }
   .clip { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
@@ -113,7 +113,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let current = null, timer = null;
+let current = null, pollTimer = null, misses = 0, clipSignature = '', startedAt = 0;
 
 async function api(path, options) {
   const response = await fetch(path, options);
@@ -129,7 +129,12 @@ function fmt(seconds) {
 function renderClips(job) {
   const results = $('results');
   $('empty').style.display = job && job.clips.length ? 'none' : 'block';
-  if (!job) { results.innerHTML = ''; return; }
+  if (!job) { results.innerHTML = ''; clipSignature = ''; return; }
+  // Rebuilding the grid on every tick would restart any video the user is
+  // watching, so only redraw when the clip set actually changes.
+  const signature = job.id + ':' + job.clips.map((clip) => clip.file).join(',');
+  if (signature === clipSignature) return;
+  clipSignature = signature;
   results.innerHTML = job.clips.map((clip) => `
     <div class="clip">
       <video controls preload="metadata" poster="/api/jobs/${job.id}/file/${clip.thumbnail}"
@@ -149,24 +154,50 @@ function renderClips(job) {
 }
 
 function paint(job) {
-  const done = job.status === 'done', failed = job.status === 'error';
+  const running = job.status === 'running' || job.status === 'queued';
+  const failed = job.status === 'error';
+  const percent = Math.round((job.progress || 0) * 100);
   $('progress').classList.add('on');
-  $('stage').textContent = job.message || job.stage;
-  $('pct').textContent = Math.round((job.progress || 0) * 100) + '%';
-  $('fill').style.width = ((job.progress || 0) * 100) + '%';
+  const elapsed = startedAt ? ` · ${fmt((Date.now() - startedAt) / 1000)} elapsed` : '';
+  $('stage').textContent = (job.message || job.stage) + (running ? elapsed : '');
+  $('pct').textContent = percent + '%';
+  $('fill').style.width = percent + '%';
   $('err').textContent = failed ? job.error : '';
-  $('go').disabled = !(done || failed);
+  $('go').disabled = running;
   renderClips(job);
-  if (done || failed) { clearInterval(timer); timer = null; loadJobs(); }
+  return running;
+}
+
+// A self-scheduling loop rather than setInterval: browsers throttle interval
+// timers in background tabs, and a single failed fetch used to clear the timer
+// permanently, which is why progress appeared to freeze until a manual reload.
+async function tick() {
+  if (!current) return;
+  try {
+    const job = await api('/api/jobs/' + current);
+    misses = 0;
+    const running = paint(job);
+    if (!running) { pollTimer = null; loadJobs(); return; }
+  } catch (error) {
+    misses += 1;
+    if (misses > 20) { pollTimer = null; $('err').textContent = 'Lost contact with the server.'; return; }
+  }
+  pollTimer = setTimeout(tick, misses ? 2000 : 1000);
 }
 
 async function poll(id) {
-  clearInterval(timer);
-  timer = setInterval(async () => {
-    try { paint(await api('/api/jobs/' + id)); } catch (e) { clearInterval(timer); }
-  }, 1200);
-  paint(await api('/api/jobs/' + id));
+  current = id;
+  misses = 0;
+  startedAt = Date.now();
+  clearTimeout(pollTimer);
+  pollTimer = null;
+  await tick();
 }
+
+// Catch up instantly when the tab comes back to the foreground.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && current && !pollTimer) tick();
+});
 
 async function loadJobs() {
   const jobs = await api('/api/jobs');
@@ -175,7 +206,7 @@ async function loadJobs() {
       ${job.title || job.source.slice(0, 28)} · ${job.clips.length} clips
     </button>`).join('');
   $('jobs').querySelectorAll('button').forEach((button) => {
-    button.onclick = async () => { current = button.dataset.id; await poll(current); loadJobs(); };
+    button.onclick = async () => { clipSignature = ''; await poll(button.dataset.id); loadJobs(); };
   });
 }
 
@@ -206,10 +237,16 @@ $('go').onclick = async () => {
 
 $('source').addEventListener('keydown', (event) => { if (event.key === 'Enter') $('go').click(); });
 
-loadJobs().then(async () => {
-  const jobs = await api('/api/jobs');
-  if (jobs.length) { current = jobs[0].id; await poll(current); loadJobs(); }
-});
+// Boot defensively: a transient failure here must not leave the page inert.
+(async function boot() {
+  try {
+    const jobs = await api('/api/jobs');
+    await loadJobs();
+    if (jobs.length) { await poll(jobs[0].id); await loadJobs(); }
+  } catch (error) {
+    setTimeout(boot, 2000);
+  }
+})();
 </script>
 </body>
 </html>

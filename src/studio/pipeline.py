@@ -8,6 +8,7 @@ whole thing inspectable from Finder.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -75,16 +76,29 @@ def job_dir(job_id: str) -> Path:
 
 
 def write_state(state: JobState) -> None:
+    """Persist job state atomically.
+
+    The worker thread rewrites this file several times a second while the UI
+    polls it. A plain write_text let a reader observe a truncated file, which
+    surfaced as a 500 from /api/jobs and killed the browser's polling loop.
+    Writing to a sibling temp file and renaming makes the swap atomic.
+    """
     directory = job_dir(state.id)
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "job.json").write_text(json.dumps(state.to_dict(), indent=2))
+    target = directory / "job.json"
+    temporary = directory / f".job.json.{uuid.uuid4().hex[:8]}"
+    temporary.write_text(json.dumps(state.to_dict(), indent=2))
+    os.replace(temporary, target)
 
 
 def read_state(job_id: str) -> JobState | None:
     path = job_dir(job_id) / "job.json"
     if not path.is_file():
         return None
-    payload = json.loads(path.read_text())
+    try:
+        payload = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None  # a writer was mid-swap; the next poll will see it
     clips = [ClipRecord(**clip) for clip in payload.pop("clips", [])]
     return JobState(**payload, clips=clips)
 
@@ -106,7 +120,10 @@ _URL_LIKE = re.compile(r"^(?:https?://)?(?:[\w-]+\.)*(?:youtube\.com|youtu\.be)/
 # yt-dlp will happily download for hours; they must be resolved to one episode.
 _COLLECTION_MARKERS = ("/@", "/channel/", "/c/", "/user/", "/playlist", "/videos", "/streams")
 _PROGRESS = re.compile(
-    r"\[download\]\s+([\d.]+)%(?:\s+of\s+~?\s*(\S+))?(?:\s+at\s+(\S+))?(?:\s+ETA\s+(\S+))?"
+    # The tilde is kept: until the last fragments arrive yt-dlp only knows an
+    # approximate total, so it drifts (2.76 -> 2.12 GiB). Showing "~2.1GiB"
+    # says that plainly instead of looking like a wrong number.
+    r"\[download\]\s+([\d.]+)%(?:\s+of\s+(~?\s*\S+))?(?:\s+at\s+(\S+))?(?:\s+ETA\s+(\S+))?"
 )
 
 # Stage boundaries on the overall progress bar. Downloading a multi-gigabyte
@@ -208,20 +225,35 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
     )
     tail: list[str] = []
     assert process.stdout is not None
+    # yt-dlp fetches video and audio as two separate files, each reporting its
+    # own 0-100% against its own size. Reported verbatim that looks like the
+    # download restarting and the total size changing, so each stream is mapped
+    # into its own slice of one monotonic bar.
+    stream = 0
     for line in process.stdout:
         tail = (tail + [line.rstrip()])[-12:]
+        if "Destination:" in line:
+            stream += 1
+        if "[Merger]" in line or "Merging formats" in line:
+            hook("download", _stage_progress("download", 0.99), "Merging audio and video…")
+            continue
         match = _PROGRESS.search(line)
-        if match:
-            share = float(match.group(1)) / 100.0
-            size, speed, eta = match.group(2), match.group(3), match.group(4)
-            detail = f"{share * 100:.0f}%"
-            if size:
-                detail += f" of {size}"
-            if speed:
-                detail += f" at {speed}"
-            if eta:
-                detail += f" · ETA {eta}"
-            hook("download", _stage_progress("download", share), f"Downloading {detail}")
+        if not match:
+            continue
+        share = float(match.group(1)) / 100.0
+        size, speed, eta = match.group(2), match.group(3), match.group(4)
+        if stream <= 1:  # the video stream is the overwhelming majority of bytes
+            overall, label = share * 0.92, "video"
+        else:
+            overall, label = 0.92 + share * 0.06, "audio"
+        detail = f"{share * 100:.0f}%"
+        if size:
+            detail += f" of {size.replace(' ', '')}"
+        if speed:
+            detail += f" at {speed}"
+        if eta:
+            detail += f" · ETA {eta}"
+        hook("download", _stage_progress("download", overall), f"Downloading {label} {detail}")
     if process.wait() != 0:
         raise RuntimeError("yt-dlp failed:\n" + "\n".join(tail))
     return destination
