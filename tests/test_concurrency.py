@@ -4,6 +4,9 @@ from threading import Event, Thread
 
 import pytest
 
+from openclips import worker
+from openclips.infrastructure.queue import InMemoryJobQueue
+
 
 def _stage_limiter_type():  # type: ignore[no-untyped-def]
     module_name = "openclips.application.concurrency"
@@ -77,3 +80,23 @@ def test_raising_body_releases_the_stage_permit() -> None:
 def _enter_stage(limiter: object, stage: str, entered: Event) -> None:
     with limiter.limit(stage):  # type: ignore[attr-defined]
         entered.set()
+
+
+def test_unhandled_processing_error_keeps_receipt_for_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = InMemoryJobQueue()
+    queue.enqueue("default", "00000000-0000-0000-0000-000000000001")
+    receipt = queue.claim("default")
+    assert receipt is not None
+
+    def fail_processing(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(worker, "_process_payload", fail_processing)
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        worker._run_claimed_job(receipt, object(), {}, queue)  # type: ignore[arg-type]
+
+    assert queue.processing_depth("default") == 1

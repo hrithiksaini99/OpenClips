@@ -336,10 +336,8 @@ def _run_claimed_job(
     queue: JobQueue,
 ) -> None:
     """Process one claimed payload and acknowledge it as a single unit of work."""
-    try:
-        _process_payload(UUID(receipt.payload), session_factory, handlers)
-    finally:
-        queue.ack(receipt)
+    _process_payload(UUID(receipt.payload), session_factory, handlers)
+    queue.ack(receipt)
 
 
 def run_claim_loop(
