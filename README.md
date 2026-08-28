@@ -147,6 +147,68 @@ delete `media/source/` if you want to keep that progress.
 looks for Arial Black, Impact, then DejaVu Sans Bold, and falls back to a default
 face if none is present.
 
+## Posting to YouTube automatically
+
+OpenClips can attach a YouTube account, write each clip's title, description and
+hashtags with Gemma, and post them on a schedule without further involvement.
+
+### Read this before you set it up
+
+**Uploads from an unaudited API project are locked to private.** Google forces
+every video that `videos.insert` receives from a project created after 28 July
+2020 into private, and states the decision cannot be appealed — the only fix is
+re-uploading through an audited project or by hand. Your posts will go up, on
+schedule, with the right metadata, and only you will be able to watch them until
+the audit passes. Apply through the
+[YouTube API Services audit form](https://support.google.com/youtube/contact/yt_api_form);
+until then leave the visibility setting on Private, because that is what it will
+be regardless.
+
+Two smaller things worth knowing:
+
+- Uploads are cheap. `videos.insert` costs 1 unit in its own quota bucket, with
+  a limit of 100 calls a day, separate from the 10,000-unit pool everything else
+  draws on. Three posts a day is nowhere near it.
+- These clips are cut from somebody else's episode. That is what the audit looks
+  hardest at, and it is a risk to the audit and to the channel. Every generated
+  description credits the source episode by name and link.
+
+### Setting it up
+
+1. Open the [Google Cloud console](https://console.cloud.google.com/) and create
+   a project.
+2. Under **APIs & Services → Library**, enable **YouTube Data API v3**.
+3. Under **OAuth consent screen**, fill in the app name and your email, and add
+   the scopes `youtube.upload` and `youtube.readonly`. **Set the publishing
+   status to "In production".** Left in "Testing", Google revokes the login
+   after seven days and the schedule stops posting with no obvious cause.
+4. Under **Credentials**, create an **OAuth client ID** of type **Desktop app**
+   and download the JSON.
+5. Save it as `config/client_secret.json` in this repository. (`config/` is
+   git-ignored, along with the token stored beside it.)
+6. Start the server, scroll to **Publishing**, and press **Connect**. Google's
+   consent screen opens in a new tab; approve it there and the panel picks it up.
+
+### Running it
+
+The **Schedule** card holds the controls:
+
+- **Post at** — the times of day a clip goes up. One clip per slot.
+- **Visibility** — private, unlisted or public (see the warning above).
+- **Per day** — a ceiling on posts per day, whatever the slots say.
+- **Queue new clips automatically** — on by default: every clip from a finished
+  job is written up and queued without asking.
+- **The arm toggle** — nothing is posted until you turn this on. It is off by
+  default and stays off across restarts until you change it.
+
+The **Queue** shows what is waiting and when each clip goes up. Titles are
+editable in place; click one and type. A failed upload retries at the next slot
+and parks itself after three attempts with the reason shown.
+
+A slot only fires while the server is running. If the machine was asleep at
+09:00 the clip still posts when it wakes, but only within two hours of the slot
+— otherwise starting the app in the evening would fire the whole day at once.
+
 ## Repository layout
 
 ```
@@ -154,15 +216,16 @@ src/studio/      the native pipeline described above
 src/openclips/   an earlier Docker/PostgreSQL/Redis service with a review
                  dashboard and publishing queues; independent of src/studio
 web/index.html   the browser UI
-clips/           generated clips (git-ignored)
+clips/           generated clips and the publish queue (git-ignored)
 media/           downloaded sources, cached by video id (git-ignored)
+config/          YouTube OAuth client and token (git-ignored)
 ```
 
 ## Not implemented
 
 Honest about the gaps: no split-screen or multi-speaker layouts, no automatic
-channel polling (a channel URL takes the latest episode only), no direct posting
-to social platforms from the studio pipeline, and no B-roll or zoom effects.
+channel polling (a channel URL takes the latest episode only), no B-roll or zoom
+effects, and no posting to anywhere but YouTube.
 
 ## Licence
 

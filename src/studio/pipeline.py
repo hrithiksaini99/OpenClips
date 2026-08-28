@@ -78,20 +78,23 @@ def job_dir(job_id: str) -> Path:
     return CLIPS_DIR / job_id
 
 
-def write_state(state: JobState) -> None:
-    """Persist job state atomically.
+def atomic_write_json(path: Path, payload: Any) -> None:
+    """Write JSON so a concurrent reader never sees a half-written file.
 
-    The worker thread rewrites this file several times a second while the UI
-    polls it. A plain write_text let a reader observe a truncated file, which
-    surfaced as a 500 from /api/jobs and killed the browser's polling loop.
-    Writing to a sibling temp file and renaming makes the swap atomic.
+    Job state is rewritten several times a second while the UI polls it, and a
+    plain write_text let a reader observe a truncated file: that surfaced as a
+    500 from /api/jobs and killed the browser's polling loop. Writing to a
+    sibling temp file and renaming makes the swap atomic. The publish queue is
+    written the same way, for the same reason.
     """
-    directory = job_dir(state.id)
-    directory.mkdir(parents=True, exist_ok=True)
-    target = directory / "job.json"
-    temporary = directory / f".job.json.{uuid.uuid4().hex[:8]}"
-    temporary.write_text(json.dumps(state.to_dict(), indent=2))
-    os.replace(temporary, target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.parent / f".{path.name}.{uuid.uuid4().hex[:8]}"
+    temporary.write_text(json.dumps(payload, indent=2))
+    os.replace(temporary, path)
+
+
+def write_state(state: JobState) -> None:
+    atomic_write_json(job_dir(state.id) / "job.json", state.to_dict())
 
 
 def read_state(job_id: str) -> JobState | None:

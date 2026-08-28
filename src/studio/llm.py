@@ -44,6 +44,51 @@ _SCHEMA = {
     "required": ["picks"],
 }
 
+def model_available(model: str, host: str = DEFAULT_HOST) -> bool:
+    """True when Ollama is up and `model` is installed."""
+    try:
+        with urllib.request.urlopen(f"{host.rstrip('/')}/api/tags", timeout=5) as response:
+            tags = json.loads(response.read())
+    except Exception:
+        return False
+    names = {entry.get("name", "") for entry in tags.get("models", [])}
+    stem = model.split(":")[0]
+    return any(name == model or name.split(":")[0] == stem for name in names)
+
+
+def generate_json(
+    *,
+    prompt: str,
+    schema: dict,
+    model: str = DEFAULT_MODEL,
+    host: str = DEFAULT_HOST,
+    timeout: float = 300.0,
+    options: dict | None = None,
+) -> dict:
+    """Ask Ollama for one JSON object shaped by `schema`.
+
+    The schema is passed as Ollama's `format` parameter, which it enforces as a
+    grammar; asking for JSON in the prompt alone returned empty completions.
+    """
+    body = json.dumps(
+        {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "format": schema,
+            "options": options or {"temperature": 0.2},
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{host.rstrip('/')}/api/generate",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read())
+    return json.loads(payload["response"])
+
+
 _INSTRUCTIONS = """You choose moments from a podcast to post as standalone short videos.
 
 Score each excerpt from 0 to 100 for how well it works alone:
@@ -84,14 +129,7 @@ class ClipRanker:
 
     def available(self) -> bool:
         """True when Ollama is up and the configured model is installed."""
-        try:
-            with urllib.request.urlopen(f"{self.host}/api/tags", timeout=5) as response:
-                tags = json.loads(response.read())
-        except Exception:
-            return False
-        names = {model.get("name", "") for model in tags.get("models", [])}
-        stem = self.model.split(":")[0]
-        return any(name == self.model or name.split(":")[0] == stem for name in names)
+        return model_available(self.model, self.host)
 
     def rank(self, excerpts: list[str]) -> list[Ranking]:
         """Score every excerpt, returning whatever the model answered cleanly."""
@@ -108,21 +146,15 @@ class ClipRanker:
         numbered = "\n\n".join(
             f"[{index + 1}] {text[:900]}" for index, text in enumerate(batch)
         )
-        body = json.dumps(
-            {
-                "model": self.model,
-                "prompt": f"{_INSTRUCTIONS}\n\n{numbered}",
-                "stream": False,
-                "format": _SCHEMA,
-                "options": {"temperature": 0.2, "num_predict": 120 * len(batch) + 200},
-            }
-        ).encode()
-        request = urllib.request.Request(
-            f"{self.host}/api/generate", data=body, headers={"Content-Type": "application/json"}
+        payload = generate_json(
+            prompt=f"{_INSTRUCTIONS}\n\n{numbered}",
+            schema=_SCHEMA,
+            model=self.model,
+            host=self.host,
+            timeout=self.timeout,
+            options={"temperature": 0.2, "num_predict": 120 * len(batch) + 200},
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
-            payload = json.loads(response.read())
-        picks = json.loads(payload["response"]).get("picks", [])
+        picks = payload.get("picks", [])
 
         raw = [
             (int(pick["id"]), float(pick["score"]), str(pick.get("title", "")).strip())

@@ -20,3 +20,4 @@ progress.md
 
 # third-party skill, installed locally (upstream: nextlevelbuilder/ui-ux-pro-max-skill)
 .claude/skills/ui-ux-pro-max/
+config/

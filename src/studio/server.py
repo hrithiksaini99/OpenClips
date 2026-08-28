@@ -14,16 +14,33 @@ from typing import Any
 import re
 import zipfile
 from collections.abc import Iterator
+from contextlib import asynccontextmanager
+from dataclasses import asdict
+from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException
+from fastapi import APIRouter, BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from studio import pipeline
+from studio import pipeline, publisher, youtube
 
 WEB_DIR = pipeline.PROJECT_ROOT / "web"
 
-app = FastAPI(title="OpenClips Studio", version="2.0.0")
+PRIVACY_LEVELS = {"private", "unlisted", "public"}
+_SLOT = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # The scheduler only posts when it is armed in the UI, which it never is by
+    # default; starting the thread here just means an armed schedule survives a
+    # restart without anyone having to press anything.
+    publisher.scheduler.start()
+    yield
+    publisher.scheduler.stop()
+
+
+app = FastAPI(title="OpenClips Studio", version="2.1.0", lifespan=lifespan)
 api = APIRouter(prefix="/api")
 
 _running: dict[str, threading.Thread] = {}
@@ -50,7 +67,7 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
     pipeline.write_state(state)
 
     def run() -> None:
-        pipeline.run_job(
+        finished = pipeline.run_job(
             job_id=job_id,
             source=source,
             hook=lambda *_: None,
@@ -62,6 +79,13 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
             transcript_path=Path(request.transcript) if request.transcript else None,
         )
         _running.pop(job_id, None)
+        # Writing a post calls the model once per clip, so it happens here on
+        # the job thread rather than holding up the request that started it.
+        if finished.status == "done" and publisher.load().schedule.auto_enqueue:
+            try:
+                publisher.enqueue(job_id)
+            except Exception as error:
+                publisher.note_error(f"Could not queue clips: {error}")
 
     thread = threading.Thread(target=run, daemon=True)
     _running[job_id] = thread
@@ -174,6 +198,177 @@ def download_all(job_id: str) -> StreamingResponse:
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{_archive_name(state)}"'},
     )
+
+
+
+# --------------------------------------------------------------------------
+# YouTube account
+# --------------------------------------------------------------------------
+
+
+def _redirect_uri(request: Request) -> str:
+    """Where Google sends the browser back.
+
+    The host is pinned to 127.0.0.1 rather than read from the browser: Google
+    requires a loopback IP for desktop OAuth clients, and someone browsing to
+    "localhost:8080" would otherwise produce a redirect_uri mismatch.
+    """
+    return f"http://127.0.0.1:{request.url.port or 8080}/api/youtube/callback"
+
+
+def _callback_page(message: str, *, ok: bool) -> HTMLResponse:
+    """The little page Google's redirect lands on."""
+    tone = "#7FB069" if ok else "#C2554D"
+    return HTMLResponse(
+        f"""<!doctype html><meta charset="utf-8"><title>OpenClips</title>
+<body style="margin:0;display:grid;place-items:center;height:100vh;
+background:#0A0A0C;color:#ECECEE;font:15px/1.6 system-ui,sans-serif">
+<div style="max-width:34rem;padding:2rem;text-align:center">
+<div style="width:.5rem;height:.5rem;border-radius:50%;background:{tone};
+margin:0 auto 1.25rem"></div>
+<p style="margin:0">{message}</p>
+<p style="margin:1rem 0 0;color:#8A8A94;font-size:13px">
+Return to the OpenClips tab.</p></div>""",
+        status_code=200 if ok else 400,
+    )
+
+
+@api.get("/youtube/status")
+def youtube_status() -> dict[str, Any]:
+    return youtube.status()
+
+
+@api.get("/youtube/auth/start")
+def youtube_auth_start(request: Request) -> dict[str, str]:
+    try:
+        return {"url": youtube.begin(_redirect_uri(request))}
+    except youtube.SetupRequired as error:
+        # 428: the request is fine, but a prerequisite has not been done yet.
+        raise HTTPException(status_code=428, detail=str(error)) from None
+
+
+@api.get("/youtube/callback", response_class=HTMLResponse)
+def youtube_callback(
+    request: Request, code: str = "", state: str = "", error: str = ""
+) -> HTMLResponse:
+    if error:
+        return _callback_page(f"YouTube declined the request: {error}", ok=False)
+    if not code or not state:
+        return _callback_page("That sign-in came back incomplete.", ok=False)
+    try:
+        youtube.complete(code=code, state=state, redirect_uri=_redirect_uri(request))
+    except youtube.YouTubeError as failure:
+        return _callback_page(str(failure), ok=False)
+    return _callback_page("Account connected.", ok=True)
+
+
+@api.delete("/youtube/session")
+def youtube_disconnect() -> dict[str, str]:
+    youtube.disconnect()
+    return {"status": "disconnected"}
+
+
+# --------------------------------------------------------------------------
+# Schedule and publishing queue
+# --------------------------------------------------------------------------
+
+
+class ScheduleUpdate(BaseModel):
+    enabled: bool | None = None
+    slots: list[str] | None = None
+    privacy: str | None = None
+    category_id: str | None = None
+    made_for_kids: bool | None = None
+    auto_enqueue: bool | None = None
+    daily_limit: int | None = None
+
+
+class EnqueueRequest(BaseModel):
+    job_id: str
+    clip_ids: list[str] | None = None
+
+
+class EntryUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    hashtags: list[str] | None = None
+    privacy: str | None = None
+
+
+@api.get("/schedule")
+def get_schedule() -> dict[str, Any]:
+    return asdict(publisher.load().schedule)
+
+
+@api.put("/schedule")
+def put_schedule(update: ScheduleUpdate) -> dict[str, Any]:
+    changes = update.model_dump(exclude_none=True)
+    if "privacy" in changes and changes["privacy"] not in PRIVACY_LEVELS:
+        raise HTTPException(status_code=422, detail="privacy must be private, unlisted or public")
+    if "slots" in changes:
+        # Silently dropping a malformed time would leave the user with a
+        # schedule that looks armed and never fires, so reject the whole update.
+        cleaned = [slot.strip() for slot in changes["slots"]]
+        bad = [slot for slot in cleaned if not _SLOT.match(slot)]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"Not a time of day: {', '.join(bad)}")
+        if not cleaned:
+            raise HTTPException(status_code=422, detail="Give at least one time of day")
+        changes["slots"] = sorted(set(cleaned))
+    if "daily_limit" in changes:
+        changes["daily_limit"] = max(1, min(int(changes["daily_limit"]), publisher.DAILY_CAP))
+    return asdict(publisher.configure(changes))
+
+
+@api.get("/queue")
+def get_queue() -> dict[str, Any]:
+    board = publisher.load()
+    times = publisher.upcoming(board)
+    return {
+        "entries": [
+            {**asdict(entry), "scheduled_for": times.get(entry.id, "")}
+            for entry in board.queue
+        ],
+        "schedule": asdict(board.schedule),
+        "posted_today": publisher.posted_today(board.queue, datetime.now()),
+        "daily_limit": min(board.schedule.daily_limit, publisher.DAILY_CAP),
+        "last_error": board.last_error,
+    }
+
+
+@api.post("/queue")
+def post_queue(request: EnqueueRequest, background: BackgroundTasks) -> dict[str, str]:
+    if pipeline.read_state(request.job_id) is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    # One model call per clip; the queue fills in behind the next few polls.
+    background.add_task(publisher.enqueue, request.job_id, request.clip_ids)
+    return {"status": "writing"}
+
+
+@api.patch("/queue/{entry_id}")
+def patch_queue(entry_id: str, update: EntryUpdate) -> dict[str, Any]:
+    changes = update.model_dump(exclude_none=True)
+    if "privacy" in changes and changes["privacy"] not in PRIVACY_LEVELS:
+        raise HTTPException(status_code=422, detail="privacy must be private, unlisted or public")
+    entry = publisher.edit(entry_id, changes)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="No editable entry with that id")
+    return asdict(entry)
+
+
+@api.delete("/queue/{entry_id}")
+def delete_queue(entry_id: str) -> dict[str, str]:
+    if not publisher.remove(entry_id):
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"status": "removed"}
+
+
+@api.post("/queue/{entry_id}/retry")
+def retry_queue(entry_id: str) -> dict[str, Any]:
+    entry = publisher.retry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="No failed entry with that id")
+    return asdict(entry)
 
 
 app.include_router(api)

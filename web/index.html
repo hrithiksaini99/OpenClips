@@ -142,6 +142,79 @@
   .dl:hover { border-color: var(--border-strong); background: #202027; }
   .dl svg { width: 14px; height: 14px; }
 
+
+  /* Publishing */
+  .pub { margin-top: 36px; }
+  .pub-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  .pub-head h2 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+  .pub-head .sub { color: var(--muted-fg); font-size: 13px; }
+  .pub-grid { display: grid; grid-template-columns: minmax(0,352px) minmax(0,1fr); gap: 20px; align-items: start; }
+  .pub-col { display: grid; gap: 20px; }
+  .acct { display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 38px; height: 38px; border-radius: 50%; background: var(--muted);
+            border: 1px solid var(--border-strong); flex: none; object-fit: cover; }
+  .acct-name { font-weight: 600; font-size: 14px; }
+  .acct-sub { color: var(--muted-fg); font-size: 12.5px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; font: inherit;
+         font-size: 13px; font-weight: 500; padding: 9px 15px; border-radius: 9px; background: var(--muted);
+         border: 1px solid var(--border); color: var(--fg); cursor: pointer; white-space: nowrap;
+         transition: border-color var(--t), background var(--t); }
+  .btn:hover { border-color: var(--border-strong); background: #202027; }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.primary { background: var(--primary); color: var(--on-primary); border-color: transparent; }
+  .btn.primary:hover { background: #fff; }
+  .btn.ghost { background: transparent; }
+  .btn.ghost:hover { color: var(--destructive); border-color: rgba(229,83,75,.36); background: transparent; }
+  .note { font-size: 12.5px; line-height: 1.55; color: var(--muted-fg); background: var(--muted);
+          border: 1px solid var(--border); border-left: 2px solid var(--accent);
+          border-radius: 8px; padding: 10px 12px; }
+  .note b { color: var(--fg); font-weight: 600; }
+  .note code { font-size: 11.5px; background: var(--bg); padding: 1px 5px; border-radius: 4px;
+               overflow-wrap: anywhere; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .rule { height: 1px; background: var(--border); margin: 15px 0; }
+  .switch { position: relative; width: 38px; height: 22px; flex: none; }
+  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--muted);
+                 border: 1px solid var(--border-strong); transition: background var(--t); pointer-events: none; }
+  .switch span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+                        border-radius: 50%; background: var(--muted-fg);
+                        transition: transform var(--t), background var(--t); }
+  .switch input:checked + span { background: var(--accent-soft); border-color: rgba(200,155,74,.5); }
+  .switch input:checked + span::after { transform: translateX(16px); background: var(--accent); }
+  .switch input:focus-visible + span { outline: 2px solid var(--ring); outline-offset: 2px; }
+  .slots { display: flex; flex-wrap: wrap; gap: 8px; }
+  .slot { display: flex; align-items: center; background: var(--bg); border: 1px solid var(--border);
+          border-radius: 8px; padding: 3px 3px 3px 10px; }
+  .slot input { width: 78px; border: none; background: transparent; padding: 5px 0; font-size: 13px;
+                font-variant-numeric: tabular-nums; }
+  .slot input:focus { outline: none; }
+  .slot button { background: none; border: none; color: var(--muted-fg); cursor: pointer;
+                 padding: 3px 6px; border-radius: 5px; line-height: 1; font-size: 15px; }
+  .slot button:hover { color: var(--destructive); }
+  .qrow { display: grid; grid-template-columns: 44px minmax(0,1fr) max-content; gap: 13px;
+          align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .qrow:last-child { border-bottom: none; padding-bottom: 0; }
+  .qrow img, .qrow .noimg { width: 44px; height: 78px; border-radius: 6px; background: var(--muted);
+                            object-fit: cover; border: 1px solid var(--border); }
+  .qtitle { font-size: 13.5px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere;
+            border-radius: 5px; padding: 1px 3px; margin-left: -3px; }
+  .qtitle[contenteditable]:hover { background: var(--muted); }
+  .qtitle[contenteditable]:focus { outline: 2px solid var(--ring); background: var(--muted); }
+  .qmeta { font-size: 12px; color: var(--muted-fg); margin-top: 3px; overflow-wrap: anywhere; }
+  .qerr { font-size: 12px; color: var(--destructive); margin-top: 3px; overflow-wrap: anywhere; }
+  .qacts { display: flex; gap: 6px; align-items: center; }
+  .pill { font-size: 11px; font-weight: 500; padding: 3px 9px; border-radius: 999px;
+          border: 1px solid var(--border); background: var(--muted); color: var(--muted-fg);
+          white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .pill.posted { color: #7FB069; border-color: rgba(127,176,105,.3); background: rgba(127,176,105,.1); }
+  .pill.failed { color: var(--destructive); border-color: rgba(229,83,75,.3); background: rgba(229,83,75,.1); }
+  .pill.uploading { color: var(--accent); border-color: rgba(200,155,74,.3); background: var(--accent-soft); }
+  .icon-btn { background: none; border: 1px solid transparent; color: var(--muted-fg); cursor: pointer;
+              border-radius: 7px; padding: 5px 8px; font: inherit; font-size: 12px; }
+  .icon-btn:hover { color: var(--fg); border-color: var(--border); }
+  @media (max-width: 900px) { .pub-grid { grid-template-columns: 1fr; } }
+
   .skeleton { background: var(--card); border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
   .skeleton .ph { aspect-ratio: 9/16; background: linear-gradient(100deg, var(--muted) 30%, #232329 50%, var(--muted) 70%);
                   background-size: 220% 100%; animation: sweep 1.5s linear infinite; }
@@ -216,6 +289,20 @@
     <h2>No clips yet</h2>
     <p>Paste a podcast link above and press Generate.</p>
   </div>
+
+  <section class="pub">
+    <div class="pub-head">
+      <h2>Publishing</h2>
+      <span class="sub" id="pubSummary"></span>
+    </div>
+    <div class="pub-grid">
+      <div class="pub-col">
+        <div class="card" id="acctCard"></div>
+        <div class="card" id="schedCard"></div>
+      </div>
+      <div class="card" id="queueCard"></div>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -361,12 +448,228 @@ $('go').onclick = async () => {
 };
 $('source').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
 
+
+// ---------------------------------------------------------------- publishing
+let ytStatus = null, board = null;
+const PRIVACY = ['private', 'unlisted', 'public'];
+
+function showPubError(message) {
+  const slot = $('pubSummary');
+  slot.textContent = message;
+  slot.style.color = 'var(--destructive)';
+  setTimeout(() => { slot.style.color = ''; refreshPublishing(); }, 7000);
+}
+
+async function refreshPublishing() {
+  try {
+    const [status, queue] = await Promise.all([api('/api/youtube/status'), api('/api/queue')]);
+    ytStatus = status; board = queue;
+  } catch (error) { return; }   // the job poll loop already reports lost contact
+  const failed = board.entries.filter((e) => e.status === 'failed').length;
+  $('pubSummary').textContent = failed ? board.last_error : '';
+  renderAccount(); renderSchedule(); renderQueue();
+}
+
+async function connectYouTube() {
+  try {
+    const { url } = await api('/api/youtube/auth/start');
+    window.open(url, '_blank', 'noopener');
+    // Consent happens in the other tab; watch for it to land.
+    const watch = setInterval(async () => {
+      await refreshPublishing();
+      if (ytStatus && ytStatus.connected) clearInterval(watch);
+    }, 2500);
+    setTimeout(() => clearInterval(watch), 300000);
+  } catch (error) { showPubError(error.message); }
+}
+
+function renderAccount() {
+  const s = ytStatus || {};
+  if (!s.client_configured) {
+    $('acctCard').innerHTML = `
+      <div><div class="acct-name">YouTube account</div>
+      <div class="acct-sub">Not set up yet</div></div>
+      <div class="rule"></div>
+      <div class="note">Create an OAuth <b>Desktop app</b> client in Google Cloud, turn on the
+      YouTube Data API v3, and save the file it gives you as
+      <code>${esc(s.client_secret_path || 'config/client_secret.json')}</code>.
+      The README walks through it.</div>`;
+    return;
+  }
+  if (!s.connected) {
+    $('acctCard').innerHTML = `
+      <div class="row"><div><div class="acct-name">YouTube account</div>
+      <div class="acct-sub">Not connected</div></div>
+      <button class="btn primary" id="connect">Connect</button></div>`;
+    $('connect').onclick = connectYouTube;
+    return;
+  }
+  const channel = s.channel;
+  $('acctCard').innerHTML = `
+    <div class="acct">
+      ${channel && channel.thumbnail
+        ? `<img class="avatar" src="${esc(channel.thumbnail)}" alt="" />`
+        : '<div class="avatar"></div>'}
+      <div style="min-width:0;flex:1">
+        <div class="acct-name">${esc(channel ? channel.title : 'Connected')}</div>
+        <div class="acct-sub">Clips post to this channel</div>
+      </div>
+      <button class="btn ghost" id="disconnect">Disconnect</button>
+    </div>
+    ${s.error ? `<div class="rule"></div><div class="note">${esc(s.error)}</div>` : ''}`;
+  $('disconnect').onclick = async () => {
+    try { await api('/api/youtube/session', { method: 'DELETE' }); }
+    catch (error) { showPubError(error.message); }
+    refreshPublishing();
+  };
+}
+
+function renderSchedule() {
+  const schedule = (board && board.schedule) || {};
+  const slots = schedule.slots || [];
+  const state = schedule.enabled
+    ? `Armed · ${board.posted_today}/${board.daily_limit} posted today`
+    : 'Not running';
+  $('schedCard').innerHTML = `
+    <div class="row">
+      <div><div class="acct-name">Schedule</div><div class="acct-sub">${state}</div></div>
+      <label class="switch" title="Arm the schedule">
+        <input type="checkbox" id="armed" ${schedule.enabled ? 'checked' : ''} /><span></span></label>
+    </div>
+    <div class="rule"></div>
+    <label>Post at</label>
+    <div class="slots" id="slots">
+      ${slots.map((time, index) => `<span class="slot">
+        <input type="time" value="${esc(time)}" data-slot="${index}" />
+        <button type="button" data-del="${index}" aria-label="Remove ${esc(time)}">&times;</button>
+      </span>`).join('')}
+      <button type="button" class="btn" id="addSlot" style="padding:6px 12px">+ Time</button>
+    </div>
+    <div class="rule"></div>
+    <div style="display:flex;gap:12px;align-items:end">
+      <div class="field" style="flex:1"><label for="privacy">Visibility</label>
+        <select id="privacy">${PRIVACY.map((level) =>
+          `<option value="${level}" ${schedule.privacy === level ? 'selected' : ''}
+          >${level[0].toUpperCase() + level.slice(1)}</option>`).join('')}</select></div>
+      <div class="field" style="width:104px"><label for="perday">Per day</label>
+        <input id="perday" type="number" min="1" max="100" value="${schedule.daily_limit || 3}" /></div>
+    </div>
+    <div class="note" style="margin-top:13px">Until your Google Cloud project passes YouTube's API
+      audit, everything uploaded through it is locked to <b>private</b>, whatever this is set to.</div>
+    <div class="rule"></div>
+    <div class="row"><div style="font-size:13px">Queue new clips automatically</div>
+      <label class="switch"><input type="checkbox" id="autoq"
+        ${schedule.auto_enqueue ? 'checked' : ''} /><span></span></label></div>`;
+
+  const save = (changes) => api('/api/schedule', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(changes),
+  }).then(refreshPublishing).catch((error) => showPubError(error.message));
+  const times = () => [...$('slots').querySelectorAll('input[type=time]')]
+    .map((input) => input.value).filter(Boolean);
+
+  $('armed').onchange = (event) => save({ enabled: event.target.checked });
+  $('autoq').onchange = (event) => save({ auto_enqueue: event.target.checked });
+  $('privacy').onchange = (event) => save({ privacy: event.target.value });
+  $('perday').onchange = (event) => save({ daily_limit: +event.target.value });
+  $('addSlot').onclick = () => save({ slots: [...times(), '12:00'] });
+  $('slots').querySelectorAll('input[type=time]').forEach((input) => {
+    input.onchange = () => save({ slots: times() });
+  });
+  $('slots').querySelectorAll('[data-del]').forEach((button) => {
+    button.onclick = () => {
+      const rest = times().filter((_, index) => index !== +button.dataset.del);
+      save({ slots: rest.length ? rest : ['09:00'] });   // never leave it with none
+    };
+  });
+}
+
+function entryRow(entry) {
+  const when = entry.scheduled_for
+    ? new Date(entry.scheduled_for).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })
+    : '';
+  const pill = { posted: 'Posted', failed: 'Failed', uploading: 'Uploading' }[entry.status]
+    || when || 'Waiting';
+  const klass = ['posted', 'failed', 'uploading'].includes(entry.status) ? entry.status : '';
+  const thumb = entry.thumbnail
+    ? `<img src="/api/jobs/${encodeURIComponent(entry.job_id)}/file/${encodeURIComponent(entry.thumbnail)}" alt="" />`
+    : '<div class="noimg"></div>';
+  const link = entry.video_id
+    ? ` · <a href="https://youtu.be/${encodeURIComponent(entry.video_id)}" target="_blank"
+         rel="noopener" style="color:var(--muted-fg)">youtu.be/${esc(entry.video_id)}</a>`
+    : '';
+  return `<div class="qrow">
+    ${thumb}
+    <div style="min-width:0">
+      <div class="qtitle" data-edit="${entry.id}"
+        ${entry.status === 'posted' ? '' : 'contenteditable="plaintext-only" spellcheck="false"'}
+      >${esc(entry.title)}</div>
+      <div class="qmeta">${esc((entry.hashtags || []).slice(0, 4).join(' '))}${link}</div>
+      ${entry.error ? `<div class="qerr">${esc(entry.error)}</div>` : ''}
+    </div>
+    <div class="qacts">
+      <span class="pill ${klass}">${esc(pill)}</span>
+      ${entry.status === 'failed' ? `<button class="icon-btn" data-retry="${entry.id}">Retry</button>` : ''}
+      ${entry.status === 'posted' ? '' : `<button class="icon-btn" data-remove="${entry.id}">Remove</button>`}
+    </div></div>`;
+}
+
+function renderQueue() {
+  // Re-rendering under an open editor would throw away what is being typed.
+  if ($('queueCard').contains(document.activeElement)) return;
+  const entries = (board && board.entries) || [];
+  const waiting = entries.filter((entry) => entry.status === 'pending').length;
+  const posted = entries.filter((entry) => entry.status === 'posted').length;
+  const head = `<div class="row">
+      <div><div class="acct-name">Queue</div><div class="acct-sub">${
+        entries.length ? `${waiting} waiting · ${posted} posted` : 'Nothing queued'}</div></div>
+      ${current ? '<button class="btn" id="queueJob">Queue these clips</button>' : ''}
+    </div><div class="rule"></div>`;
+  $('queueCard').innerHTML = head + (entries.length
+    ? entries.map(entryRow).join('')
+    : `<div class="acct-sub">Clips get a title, description and hashtags written for them, then
+       post at the times on the left. Titles here are editable.</div>`);
+
+  if ($('queueJob')) $('queueJob').onclick = async () => {
+    const button = $('queueJob');
+    button.disabled = true; button.textContent = 'Writing posts…';
+    try { await api('/api/queue', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: current }),
+    }); } catch (error) { showPubError(error.message); }
+    setTimeout(refreshPublishing, 2000);
+  };
+  $('queueCard').querySelectorAll('[data-retry]').forEach((button) => {
+    button.onclick = () => api('/api/queue/' + button.dataset.retry + '/retry', { method: 'POST' })
+      .then(refreshPublishing).catch((error) => showPubError(error.message));
+  });
+  $('queueCard').querySelectorAll('[data-remove]').forEach((button) => {
+    button.onclick = () => api('/api/queue/' + button.dataset.remove, { method: 'DELETE' })
+      .then(refreshPublishing).catch((error) => showPubError(error.message));
+  });
+  $('queueCard').querySelectorAll('[data-edit][contenteditable]').forEach((cell) => {
+    cell.onblur = async () => {
+      const title = cell.textContent.trim();
+      const entry = entries.find((item) => item.id === cell.dataset.edit);
+      if (entry && title && title !== entry.title) {
+        try { await api('/api/queue/' + cell.dataset.edit, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title }),
+        }); } catch (error) { showPubError(error.message); }
+      }
+      refreshPublishing();
+    };
+    cell.onkeydown = (event) => { if (event.key === 'Enter') { event.preventDefault(); cell.blur(); } };
+  });
+}
+
 (async function boot() {
   try {
     const jobs = await api('/api/jobs');
     await loadJobs();
     if (jobs.length) { await poll(jobs[0].id); await loadJobs(); }
-  } catch (error) { setTimeout(boot, 2000); }
+  } catch (error) { setTimeout(boot, 2000); return; }
+  await refreshPublishing();
+  setInterval(refreshPublishing, 5000);
 })();
 </script>
 </body>
