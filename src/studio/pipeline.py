@@ -200,21 +200,28 @@ def video_title(url: str) -> str:
         return ""
 
 
-def download(url: str, destination: Path, hook: ProgressHook) -> Path:
-    """Fetch one video with yt-dlp, reporting real download progress."""
+AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio"
+VIDEO_FORMAT = "bestvideo[ext=mp4][height<=1080]/best[ext=mp4]"
+
+
+def _download_stream(
+    url: str,
+    *,
+    fmt: str,
+    destination: Path,
+    label: str,
+    hook: ProgressHook | None,
+    span: tuple[float, float],
+) -> Path:
+    """Fetch one stream with yt-dlp, reporting progress into a slice of the bar."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     process = subprocess.Popen(
         [
-            binary("yt-dlp"), "--newline", "--no-playlist",
-            "-f", "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]",
-            "--merge-output-format", "mp4",
+            binary("yt-dlp"), "--newline", "--no-playlist", "-f", fmt,
             # YouTube throttles a single DASH connection hard (~0.6 MB/s on a
-            # 2 GB episode); fetching fragments concurrently is several times
-            # faster and is the difference between minutes and an hour.
+            # 2 GB stream); concurrent fragments are several times faster.
             "--concurrent-fragments", "8",
             "--retries", "10", "--fragment-retries", "10",
-            # yt-dlp shells out to FFmpeg to merge the streams, and it searches
-            # PATH, which does not include Homebrew in every launch context.
             "--ffmpeg-location", binary("ffmpeg"),
             "-o", str(destination), "--", url,
         ],
@@ -224,39 +231,65 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
         bufsize=1,
     )
     tail: list[str] = []
+    low, high = span
     assert process.stdout is not None
-    # yt-dlp fetches video and audio as two separate files, each reporting its
-    # own 0-100% against its own size. Reported verbatim that looks like the
-    # download restarting and the total size changing, so each stream is mapped
-    # into its own slice of one monotonic bar.
-    stream = 0
     for line in process.stdout:
         tail = (tail + [line.rstrip()])[-12:]
-        if "Destination:" in line:
-            stream += 1
-        if "[Merger]" in line or "Merging formats" in line:
-            hook("download", _stage_progress("download", 0.99), "Merging audio and video…")
-            continue
         match = _PROGRESS.search(line)
-        if not match:
+        if not match or hook is None:
             continue
         share = float(match.group(1)) / 100.0
         size, speed, eta = match.group(2), match.group(3), match.group(4)
-        if stream <= 1:  # the video stream is the overwhelming majority of bytes
-            overall, label = share * 0.92, "video"
-        else:
-            overall, label = 0.92 + share * 0.06, "audio"
         detail = f"{share * 100:.0f}%"
         if size:
             detail += f" of {size.replace(' ', '')}"
         if speed:
             detail += f" at {speed}"
         if eta:
-            detail += f" · ETA {eta}"
-        hook("download", _stage_progress("download", overall), f"Downloading {label} {detail}")
+            detail += f" \u00b7 ETA {eta}"
+        hook("download", low + (high - low) * share, f"Downloading {label} {detail}")
     if process.wait() != 0:
-        raise RuntimeError("yt-dlp failed:\n" + "\n".join(tail))
+        raise RuntimeError(f"yt-dlp failed fetching {label}:\n" + "\n".join(tail))
     return destination
+
+
+@dataclass(frozen=True)
+class Sources:
+    """Audio and video kept as separate files.
+
+    yt-dlp fetches them separately anyway and then spends minutes merging a
+    multi-gigabyte MP4. Nothing downstream needs that merge: transcription reads
+    the audio, and rendering takes both as two inputs.
+    """
+
+    video: Path
+    audio: Path
+
+
+def download_sources(
+    url: str, base: Path, hook: ProgressHook, workers: int = 2
+) -> Sources:
+    """Fetch audio and video concurrently, returning as soon as both are on disk.
+
+    Audio is small (~140 MB against ~2.7 GB) and arrives in well under a minute,
+    so the caller can begin transcribing while the video is still downloading.
+    """
+    audio_path = base.with_suffix(".m4a")
+    video_path = base.with_suffix(".mp4")
+    del workers
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        audio_future = pool.submit(
+            _download_stream, url, fmt=AUDIO_FORMAT, destination=audio_path,
+            label="audio", hook=hook, span=(_stage_progress("download", 0.0),
+                                            _stage_progress("download", 0.15)),
+        )
+        video_future = pool.submit(
+            _download_stream, url, fmt=VIDEO_FORMAT, destination=video_path,
+            label="video", hook=hook, span=(_stage_progress("download", 0.15),
+                                            _stage_progress("download", 1.0)),
+        )
+        return Sources(video=video_future.result(), audio=audio_future.result())
 
 
 CHUNK_SECONDS = 480.0
@@ -431,6 +464,7 @@ def _render_one(payload: dict[str, Any]) -> dict[str, Any]:
     words = [Word(**word) for word in payload["words"]]
     render_clip(
         source=Path(payload["source"]),
+        audio=Path(payload["audio"]) if payload.get("audio") else None,
         destination=Path(payload["destination"]),
         start=payload["start"],
         end=payload["end"],
@@ -476,11 +510,30 @@ def run_job(
     try:
         source = normalize_source(source)
         state.source = source
+        audio: Path | None = None
+        pending_video: Any = None
         if is_remote(source):
             if is_collection(source):
                 source = resolve_episode(source, report)
             state.title = video_title(source)
-            video = download(source, MEDIA_DIR / "source" / f"{job_id}.mp4", report)
+            base = MEDIA_DIR / "source" / job_id
+            base.parent.mkdir(parents=True, exist_ok=True)
+            # Audio is ~140 MB and lands in under a minute; the video is ~2.7 GB.
+            # Start both, then transcribe from the audio while the video streams
+            # in behind us, so the two slowest stages overlap.
+            downloads = ThreadPoolExecutor(max_workers=2)
+            audio_job = downloads.submit(
+                _download_stream, source, fmt=AUDIO_FORMAT,
+                destination=base.with_suffix(".m4a"), label="audio", hook=report,
+                span=(_stage_progress("download", 0.0), _stage_progress("download", 1.0)),
+            )
+            pending_video = downloads.submit(
+                _download_stream, source, fmt=VIDEO_FORMAT,
+                destination=base.with_suffix(".mp4"), label="video", hook=None,
+                span=(0.0, 0.0),
+            )
+            audio = audio_job.result()
+            video = base.with_suffix(".mp4")
         else:
             video = Path(source).expanduser().resolve()
             if not video.is_file():
@@ -491,7 +544,7 @@ def run_job(
             report("transcribe", _stage_progress("transcribe", 1.0), "Loading existing transcript…")
             words = load_words(transcript_path)
         else:
-            words = transcribe(video, model_size, report, workers=workers)
+            words = transcribe(audio or video, model_size, report, workers=workers)
         if not words:
             raise RuntimeError("Transcription produced no words")
 
@@ -500,7 +553,11 @@ def run_job(
         if not candidates:
             raise RuntimeError("No clip-worthy segments found")
 
-        report("render", _stage_progress("render", 0.0), f"Rendering {len(candidates)} clips in parallel…")
+        if pending_video is not None:
+            report("render", _stage_progress("render", 0.0), "Waiting for the video download…")
+            pending_video.result()
+            downloads.shutdown(wait=True)
+        report("render", _stage_progress("render", 0.0), f"Rendering {len(candidates)} clips…")
         payloads = []
         records: dict[str, ClipRecord] = {}
         for index, candidate in enumerate(candidates, start=1):
@@ -515,6 +572,7 @@ def run_job(
                 {
                     "id": clip_id,
                     "source": str(video),
+                    "audio": str(audio) if audio else None,
                     "destination": str(destination),
                     "start": candidate.start,
                     "end": candidate.end,

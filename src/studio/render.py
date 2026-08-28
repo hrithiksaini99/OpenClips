@@ -55,12 +55,18 @@ def render_clip(
     source: Path,
     destination: Path,
     start: float,
+    audio: Path | None = None,
     end: float,
     words: list[Word],
     style: CaptionStyle | None = None,
     face_track: bool = True,
 ) -> RenderResult:
-    """Cut one vertical clip with word-level captions burned in."""
+    """Cut one vertical clip with word-level captions burned in.
+
+    `audio` is the separately downloaded audio stream. Keeping it apart from the
+    video avoids merging a multi-gigabyte MP4 up front just to slice seconds out
+    of it; when absent the video's own audio track is used.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
     duration = end - start
     source_width, source_height = probe_dimensions(source)
@@ -95,13 +101,23 @@ def render_clip(
             f"[0:v]{crop},scale={OUT_WIDTH}:{OUT_HEIGHT}:flags=lanczos[v];"
             f"[v][1:v]overlay=0:{overlay_y}:format=auto[out]"
         )
+        command = [
+            binary("ffmpeg"), "-nostdin", "-v", "error", "-y",
+            "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source),
+        ]
+        if audio is not None:
+            command += ["-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(audio)]
+        # Inputs: 0=video, 1=audio (when separate), then the caption sequence.
+        audio_map = "1:a:0" if audio is not None else "0:a:0"
+        command += [
+            "-framerate", str(track.fps), "-i", str(track.directory / "cap-%05d.png"),
+        ]
+        caption_input = "2:v" if audio is not None else "1:v"
         subprocess.run(
             [
-                binary("ffmpeg"), "-nostdin", "-v", "error", "-y",
-                "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source),
-                "-framerate", str(track.fps), "-i", str(track.directory / "cap-%05d.png"),
-                "-filter_complex", filtergraph,
-                "-map", "[out]", "-map", "0:a:0",
+                *command,
+                "-filter_complex", filtergraph.replace("[1:v]", f"[{caption_input}]"),
+                "-map", "[out]", "-map", audio_map,
                 "-af", LOUDNORM,
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
                 "-pix_fmt", "yuv420p", "-profile:v", "high", "-movflags", "+faststart",
