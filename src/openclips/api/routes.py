@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -290,6 +290,31 @@ def build_router(
         if record is None:
             raise _not_found("Clip", clip_id)
         return ClipOut.model_validate(record)
+
+    def _clip_artifact(clip_id: UUID, session: Session, attribute: str) -> FileResponse:
+        _, _, clips = _repos(session)
+        record = clips.get(clip_id)
+        if record is None:
+            raise _not_found("Clip", clip_id)
+        key = getattr(record, attribute)
+        if not key:
+            raise _not_found("Clip artifact", clip_id)
+        path = services.storage.resolve(str(key))
+        if not path.is_file():
+            raise _not_found("Clip artifact", clip_id)
+        return FileResponse(path)
+
+    @router.get("/clips/{clip_id}/media")
+    def get_clip_media(
+        clip_id: UUID, session: Session = Depends(get_session)
+    ) -> FileResponse:
+        return _clip_artifact(clip_id, session, "output_path")
+
+    @router.get("/clips/{clip_id}/caption")
+    def get_clip_caption(
+        clip_id: UUID, session: Session = Depends(get_session)
+    ) -> FileResponse:
+        return _clip_artifact(clip_id, session, "caption_path")
 
     def _apply_edit_event(clips: ClipRepository, clip_id: UUID) -> None:
         try:

@@ -23,6 +23,7 @@ from openclips.infrastructure.repositories import (
     JobRepository,
     PublicationRepository,
 )
+from openclips.providers.media_urls import PublicMediaUrlProvider
 from openclips.providers.platforms.base import (
     PlatformPublisher,
     PublishError,
@@ -87,6 +88,7 @@ class ScheduleCoordinator:
         publishers: dict[Platform, PlatformPublisher],
         storage: MediaStorage,
         clock: Callable[[], datetime] | None = None,
+        media_url_provider: PublicMediaUrlProvider | None = None,
     ) -> None:
         self.clips = clips
         self.publications = publications
@@ -94,6 +96,7 @@ class ScheduleCoordinator:
         self.publishers = publishers
         self.storage = storage
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._media_url_provider = media_url_provider
 
     def schedule(
         self,
@@ -204,7 +207,16 @@ class ScheduleCoordinator:
             raise PublishError(msg)
         media = self.storage.resolve(str(clip.output_path))
         title = clip.title or "OpenClips"
-        return PublishRequest(clip_media=media, title=title)
+        media_url: str | None = None
+        if record.platform is Platform.INSTAGRAM_REELS:
+            if self._media_url_provider is None:
+                msg = (
+                    "Instagram publishing requires a public media URL provider; "
+                    "set OPENCLIPS_PUBLIC_MEDIA_BASE_URL"
+                )
+                raise PublishError(msg)
+            media_url = self._media_url_provider.resolve(record.clip_id)
+        return PublishRequest(clip_media=media, title=title, media_url=media_url)
 
     def _fail(self, record: PublicationRecord, message: str) -> PublicationRecord:
         failed = self.publications.transition(

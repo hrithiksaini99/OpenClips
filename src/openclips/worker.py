@@ -178,6 +178,7 @@ def build_handlers(settings: Settings, storage: MediaStorage) -> dict[str, Handl
             instagram_account_id=settings.instagram_account_id,
             instagram_access_token=settings.instagram_access_token,
             youtube_access_token=settings.youtube_access_token,
+            public_media_base_url=settings.public_media_base_url,
             storage=storage,
         )
     )
@@ -196,6 +197,7 @@ def make_publish_handlers(
     instagram_account_id: str,
     instagram_access_token: str,
     youtube_access_token: str,
+    public_media_base_url: str = "",
     storage: MediaStorage,
 ) -> dict[str, Handler]:
     """Register independent publish handlers per platform queue."""
@@ -203,6 +205,7 @@ def make_publish_handlers(
     from openclips.application.publishing import ScheduleCoordinator
     from openclips.domain.publishing import Platform
     from openclips.infrastructure.repositories import PublicationRepository
+    from openclips.providers.media_urls import build_media_url_provider
     from openclips.providers.platforms.base import PlatformPublisher
     from openclips.providers.platforms.instagram import InstagramReelsPublisher
     from openclips.providers.platforms.youtube import YouTubeShortsPublisher
@@ -213,6 +216,7 @@ def make_publish_handlers(
         ),
         Platform.YOUTUBE_SHORTS: YouTubeShortsPublisher(access_token=youtube_access_token),
     }
+    media_url_provider = build_media_url_provider(public_media_base_url)
 
     def _make(platform: Platform) -> Handler:
         def handle(session: Session, job: JobRecord) -> None:
@@ -222,6 +226,7 @@ def make_publish_handlers(
                 jobs=JobRepository(session),
                 publishers={platform: publisher_map[platform]},
                 storage=storage,
+                media_url_provider=media_url_provider,
             )
             coordinator.run(job)
 

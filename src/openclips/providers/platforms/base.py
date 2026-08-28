@@ -17,6 +17,7 @@ class PublishRequest:
     clip_media: Path
     title: str
     description: str = ""
+    media_url: str | None = None
 
 
 @dataclass(frozen=True)

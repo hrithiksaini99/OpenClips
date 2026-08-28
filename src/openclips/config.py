@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     render_width: int = Field(default=1080, ge=64)
     render_height: int = Field(default=1920, ge=64)
     admin_token: str = ""
+    public_media_base_url: str = ""
     instagram_account_id: str = ""
     instagram_access_token: str = ""
     youtube_access_token: str = ""

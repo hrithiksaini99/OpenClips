@@ -28,7 +28,47 @@ def media(tmp_path: Path) -> Path:
 
 
 def _request(media: Path) -> PublishRequest:
-    return PublishRequest(clip_media=media, title="My clip", description="desc")
+    return PublishRequest(
+        clip_media=media,
+        title="My clip",
+        description="desc",
+        media_url="https://clips.example/api/v1/clips/abc/media",
+    )
+
+
+def test_instagram_posts_the_provided_media_url_and_never_uses_file_scheme(media: Path) -> None:
+    calls: list[list[str]] = []
+
+    def runner(argv) -> subprocess.CompletedProcess[str]:  # type: ignore[no-untyped-def]
+        calls.append(list(argv))
+        if "/media_publish" in argv[4]:
+            return _completed(stdout='{"id": "published-1"}')
+        return _completed(stdout='{"id": "container-9"}')
+
+    publisher = InstagramReelsPublisher(
+        account_id="acc-1", access_token="tok", transport=runner
+    )
+    request = PublishRequest(
+        clip_media=media,
+        title="My clip",
+        media_url="https://clips.example/api/v1/clips/xyz/media",
+    )
+    publisher.publish(request)
+
+    assert '"video_url": "https://clips.example/api/v1/clips/xyz/media"' in calls[0][6]
+    assert all("file://" not in part for call in calls for part in call)
+
+
+def test_instagram_requires_a_public_media_url(media: Path) -> None:
+    publisher = InstagramReelsPublisher(
+        account_id="acc-1",
+        access_token="tok",
+        transport=lambda argv: _completed(),
+    )
+    request = PublishRequest(clip_media=media, title="My clip", media_url=None)
+
+    with pytest.raises(PublishError):
+        publisher.publish(request)
 
 
 def test_transport_runner_raises_publish_error_on_failure() -> None:

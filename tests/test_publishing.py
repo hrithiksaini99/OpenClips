@@ -265,6 +265,35 @@ def _publish_handler(harness: _Harness):  # type: ignore[no-untyped-def]
     return handle
 
 
+def test_instagram_publish_fails_when_public_media_url_is_unavailable(harness: _Harness) -> None:
+    from openclips.providers.media_urls import UnavailableMediaUrlProvider
+
+    transport_calls: list[object] = []
+
+    class RecordingPublisher:
+        def publish(self, request: object) -> PublishResult:
+            transport_calls.append(request)
+            return PublishResult(external_id="x", external_url="https://x/x")
+
+    coordinator = ScheduleCoordinator(
+        clips=harness.clips,
+        publications=harness.publications,
+        jobs=harness.jobs,
+        publishers={Platform.INSTAGRAM_REELS: RecordingPublisher()},
+        storage=harness.coordinator.storage,
+        clock=_clock,
+        media_url_provider=UnavailableMediaUrlProvider(),
+    )
+    clip_id = harness.clips.list_all()[0].id
+    record = coordinator.schedule(clip_id, Platform.INSTAGRAM_REELS)
+
+    failed = coordinator.publish_publication(record.id)
+
+    assert failed.status is PublicationStatus.SCHEDULED
+    assert failed.error is not None and "OPENCLIPS_PUBLIC_MEDIA_BASE_URL" in failed.error
+    assert transport_calls == []
+
+
 def test_backoff_is_exponential_and_capped() -> None:
     assert backoff_seconds(1) == 30
     assert backoff_seconds(2) == 60
