@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -262,7 +262,13 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
 CHUNK_SECONDS = 480.0
 # A `medium` model costs roughly 1.5 GB resident per process, so parallelism is
 # capped by model size rather than by CPU count alone.
-_MODEL_WORKER_CAP = {"tiny": 8, "base": 8, "small": 6, "medium": 3, "large-v3": 2}
+_MODEL_WORKER_CAP = {"tiny": 8, "base": 8, "small": 6, "medium": 4, "large-v3": 3}
+# Measured resident cost of one loaded model; used to size concurrency to RAM.
+MODEL_FOOTPRINT_MB = {"tiny": 250, "base": 400, "small": 900, "medium": 2000, "large-v3": 3400}
+# One 1080x1920 encode plus its caption rendering.
+RENDER_FOOTPRINT_MB = 700
+# Activation + audio buffers a shared-model worker adds on top of the weights.
+PER_WORKER_DELTA_MB = 400
 
 
 def _extract_audio(video: Path, destination: Path) -> float:
@@ -290,40 +296,60 @@ def _extract_audio(video: Path, destination: Path) -> float:
     return float(completed.stdout.strip())
 
 
-def _transcribe_chunk(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """Worker entry point: transcribe one audio slice and rebase its timings."""
-    from faster_whisper import WhisperModel
+def available_memory_mb() -> float:
+    """Memory we may actually use right now, in MB.
 
-    model = WhisperModel(payload["model"], device="cpu", compute_type="int8")
-    segments, _info = model.transcribe(
-        payload["audio"],
-        word_timestamps=True,
-        vad_filter=True,
-        beam_size=1,
-        clip_timestamps=[payload["start"], payload["end"]],
-    )
-    words: list[dict[str, Any]] = []
-    for segment in segments:
-        for raw in segment.words or []:
-            text = str(raw.word).strip()
-            if not text:
-                continue
-            start = float(raw.start)
-            words.append(
-                {
-                    "text": text,
-                    "start": start,
-                    "end": max(start, float(raw.end)),
-                    "probability": float(getattr(raw, "probability", 1.0)),
-                }
-            )
-    return words
+    psutil is used rather than os.sysconf because the deployment target is
+    Windows, where sysconf does not exist.
+    """
+    try:
+        import psutil
+
+        return psutil.virtual_memory().available / 1048576
+    except Exception:
+        return 4096.0  # conservative guess rather than an unbounded pool
+
+
+def _memory_budget_workers(per_worker_mb: float, requested: int, floor: int = 1) -> int:
+    """Cap concurrency to what free RAM can actually hold.
+
+    A pool sized only by CPU count is what took the machine down: six
+    transcription workers at ~1.5 GB each asked for ~9 GB on a box that had far
+    less free. Two thirds of currently-available memory is offered to the pool
+    and the rest is left for the OS, the browser and page cache.
+    """
+    affordable = int((available_memory_mb() * 0.66) // max(per_worker_mb, 1))
+    return max(floor, min(requested, affordable))
+
+
+def _shared_model_workers(model_mb: float, requested: int) -> int:
+    """Size a shared-model pool: the weights are paid for once, not per worker.
+
+    Measured: one `small` model is ~845 MB and stays ~838 MB with four internal
+    workers, so only the per-worker activation and audio buffers scale. Budget
+    the weights once and a modest delta per worker.
+    """
+    budget = available_memory_mb() * 0.66
+    if budget <= model_mb:
+        return 1  # too tight to parallelise, but still run
+    affordable = int((budget - model_mb) // PER_WORKER_DELTA_MB)
+    return max(1, min(requested, affordable))
 
 
 def transcribe(
     video: Path, model_size: str, hook: ProgressHook, workers: int = 4
 ) -> list[Word]:
-    """Transcribe by splitting the audio and running slices in parallel processes."""
+    """Transcribe audio slices concurrently against a single shared model.
+
+    Earlier this used a process pool, which gave every worker its own copy of
+    the model: a `small` worker measures ~845 MB before it transcribes a single
+    second, so six of them exhausted memory and hard-crashed the machine.
+    CTranslate2 shares model weights across its internal workers and releases
+    the GIL during compute, so threads give the same parallelism for roughly the
+    memory of one model (measured: 838 MB for four workers, versus 3.4 GB).
+    """
+    from faster_whisper import WhisperModel
+
     hook("transcribe", _stage_progress("transcribe", 0.02), "Extracting audio…")
     with tempfile.TemporaryDirectory(prefix="openclips-audio-") as temporary:
         audio = Path(temporary) / "audio.wav"
@@ -336,32 +362,64 @@ def transcribe(
             cursor += CHUNK_SECONDS
 
         parallel = max(1, min(workers, _MODEL_WORKER_CAP.get(model_size, 4), len(bounds)))
+        parallel = _shared_model_workers(MODEL_FOOTPRINT_MB.get(model_size, 1200), parallel)
+
         hook(
             "transcribe",
-            _stage_progress("transcribe", 0.05),
-            f"Transcribing {duration / 60:.0f} min with {model_size} × {parallel} workers…",
+            _stage_progress("transcribe", 0.04),
+            f"Loading {model_size} model…",
+        )
+        model = WhisperModel(
+            model_size,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=max(1, min(4, (os.cpu_count() or 4) // parallel)),
+            num_workers=parallel,
+        )
+        hook(
+            "transcribe",
+            _stage_progress("transcribe", 0.06),
+            f"Transcribing {duration / 60:.0f} min with {model_size} x {parallel}…",
         )
 
-        payloads = [
-            {"audio": str(audio), "model": model_size, "start": start, "end": end}
-            for start, end in bounds
-        ]
-        collected: list[list[dict[str, Any]]] = [[] for _ in payloads]
+        def run(index: int) -> tuple[int, list[dict[str, Any]]]:
+            begin, finish = bounds[index]
+            segments, _info = model.transcribe(
+                str(audio),
+                word_timestamps=True,
+                vad_filter=True,
+                beam_size=1,
+                clip_timestamps=[begin, finish],
+            )
+            words: list[dict[str, Any]] = []
+            for segment in segments:
+                for raw in segment.words or []:
+                    text = str(raw.word).strip()
+                    if not text:
+                        continue
+                    begin_at = float(raw.start)
+                    words.append(
+                        {
+                            "text": text,
+                            "start": begin_at,
+                            "end": max(begin_at, float(raw.end)),
+                            "probability": float(getattr(raw, "probability", 1.0)),
+                        }
+                    )
+            return index, words
+
+        collected: list[list[dict[str, Any]]] = [[] for _ in bounds]
         done = 0
-        with ProcessPoolExecutor(max_workers=parallel) as pool:
-            futures = {
-                pool.submit(_transcribe_chunk, payload): index
-                for index, payload in enumerate(payloads)
-            }
-            for future in as_completed(futures):
-                index = futures[future]
-                collected[index] = future.result()
+        with ThreadPoolExecutor(max_workers=parallel) as pool:
+            for index, words in pool.map(run, range(len(bounds))):
+                collected[index] = words
                 done += 1
                 hook(
                     "transcribe",
-                    _stage_progress("transcribe", 0.05 + 0.95 * (done / len(payloads))),
-                    f"Transcribed {done}/{len(payloads)} segments",
+                    _stage_progress("transcribe", 0.06 + 0.94 * (done / len(bounds))),
+                    f"Transcribed {done}/{len(bounds)} segments",
                 )
+        del model
 
     words = [Word(**word) for chunk in collected for word in chunk]
     words.sort(key=lambda word: (word.start, word.end))
@@ -477,7 +535,13 @@ def run_job(
             )
 
         done = 0
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        render_workers = _memory_budget_workers(RENDER_FOOTPRINT_MB, workers)
+        report(
+            "render",
+            _stage_progress("render", 0.0),
+            f"Rendering {len(candidates)} clips ({render_workers} at a time)…",
+        )
+        with ProcessPoolExecutor(max_workers=render_workers) as pool:
             futures = [pool.submit(_render_one, payload) for payload in payloads]
             for future in as_completed(futures):
                 result = future.result()
