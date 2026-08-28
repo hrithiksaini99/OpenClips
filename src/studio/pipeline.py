@@ -7,11 +7,13 @@ whole thing inspectable from Finder.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -205,6 +207,42 @@ AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio"
 VIDEO_FORMAT = "bestvideo[ext=mp4][height<=1080]/best[ext=mp4]"
 
 
+_VIDEO_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
+
+
+def cache_key(url: str) -> str:
+    """A stable per-video name so the same episode is never fetched twice.
+
+    Naming downloads after the job meant every run started from zero, and a
+    restart threw away whatever had already arrived. Keyed by video id instead,
+    a finished file is reused outright and a partial one is resumed by yt-dlp.
+    """
+    match = _VIDEO_ID.search(url)
+    if match:
+        return match.group(1)
+    return hashlib.sha256(url.encode()).hexdigest()[:16]
+
+
+def _upgrade_yt_dlp() -> bool:
+    """Pull the newest yt-dlp.
+
+    Nearly every download failure is YouTube changing something that upstream
+    has already fixed, so an upgrade-and-retry recovers without a person
+    noticing. Returns whether the upgrade command succeeded.
+    """
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "--quiet", "yt-dlp"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        binary.cache_clear()  # the console script may have been replaced
+        return completed.returncode == 0
+    except Exception:
+        return False
+
+
 def _download_stream(
     url: str,
     *,
@@ -214,8 +252,37 @@ def _download_stream(
     hook: ProgressHook | None,
     span: tuple[float, float],
 ) -> Path:
-    """Fetch one stream with yt-dlp, reporting progress into a slice of the bar."""
+    """Fetch one stream with yt-dlp, reporting progress into a slice of the bar.
+
+    A completed file is reused as-is; a partial one is resumed, which yt-dlp
+    does by default once the destination name is stable. A failure is retried
+    once after upgrading yt-dlp, since YouTube-side changes are the usual cause
+    and upstream has normally already shipped the fix.
+    """
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_file() and destination.stat().st_size > 0:
+        if hook is not None:
+            hook("download", span[1], f"Reusing cached {label}")
+        return destination
+    try:
+        return _run_yt_dlp(url, fmt=fmt, destination=destination, label=label, hook=hook, span=span)
+    except RuntimeError:
+        if not _upgrade_yt_dlp():
+            raise
+        if hook is not None:
+            hook("download", span[0], f"Updated yt-dlp, retrying {label}…")
+        return _run_yt_dlp(url, fmt=fmt, destination=destination, label=label, hook=hook, span=span)
+
+
+def _run_yt_dlp(
+    url: str,
+    *,
+    fmt: str,
+    destination: Path,
+    label: str,
+    hook: ProgressHook | None,
+    span: tuple[float, float],
+) -> Path:
     process = subprocess.Popen(
         [
             binary("yt-dlp"), "--newline", "--no-playlist", "-f", fmt,
@@ -566,7 +633,9 @@ def run_job(
             if is_collection(source):
                 source = resolve_episode(source, report)
             state.title = video_title(source)
-            base = MEDIA_DIR / "source" / job_id
+            # Keyed by video rather than by job, so a re-run of the same
+            # episode reuses what is already on disk instead of refetching it.
+            base = MEDIA_DIR / "source" / cache_key(source)
             base.parent.mkdir(parents=True, exist_ok=True)
             # Audio is ~140 MB and lands in under a minute; the video is ~2.7 GB.
             # Start both, then transcribe from the audio while the video streams
