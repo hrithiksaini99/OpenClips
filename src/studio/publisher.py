@@ -70,7 +70,6 @@ class Schedule:
     category_id: str = "22"  # People & Blogs
     made_for_kids: bool = False
     auto_enqueue: bool = True
-    daily_limit: int = 3
 
 
 @dataclass
@@ -171,7 +170,13 @@ def posted_today(queue: list[Entry], now: datetime) -> int:
 
 
 def _daily_limit(schedule: Schedule) -> int:
-    return max(1, min(schedule.daily_limit, DAILY_CAP))
+    """How many clips go up in a day: one per chosen time.
+
+    This used to be a separate number, which meant the grid could say 24 times
+    and the limit could say 10, with nothing on screen explaining which won.
+    The times are now the whole answer.
+    """
+    return max(1, min(len(schedule.slots), DAILY_CAP))
 
 
 def upcoming(board: Board, now: datetime | None = None) -> dict[str, str]:

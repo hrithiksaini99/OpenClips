@@ -213,9 +213,10 @@ between all of them.
 
 The **Schedule** card holds the controls:
 
-- **Post at** — the times of day a clip goes up. One clip per slot.
+- **Post at** — the times of day a clip goes up, one clip each. The number of
+  times you pick *is* how many post per day; there is no second control that
+  could disagree with it.
 - **Visibility** — private, unlisted or public (see the warning above).
-- **Per day** — a ceiling on posts per day, whatever the slots say.
 - **Queue new clips automatically** — on by default: every clip from a finished
   job is written up and queued without asking.
 - **The arm toggle** — nothing is posted until you turn this on. It is off by

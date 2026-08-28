@@ -311,7 +311,6 @@ class ScheduleUpdate(BaseModel):
     category_id: str | None = None
     made_for_kids: bool | None = None
     auto_enqueue: bool | None = None
-    daily_limit: int | None = None
 
 
 class EnqueueRequest(BaseModel):
@@ -346,8 +345,6 @@ def put_schedule(update: ScheduleUpdate) -> dict[str, Any]:
         if not cleaned:
             raise HTTPException(status_code=422, detail="Give at least one time of day")
         changes["slots"] = sorted(set(cleaned))
-    if "daily_limit" in changes:
-        changes["daily_limit"] = max(1, min(int(changes["daily_limit"]), publisher.DAILY_CAP))
     return asdict(publisher.configure(changes))
 
 
@@ -374,7 +371,7 @@ def get_queue() -> dict[str, Any]:
         ],
         "schedule": asdict(board.schedule),
         "posted_today": publisher.posted_today(board.queue, datetime.now()),
-        "daily_limit": min(board.schedule.daily_limit, publisher.DAILY_CAP),
+        "daily_limit": publisher._daily_limit(board.schedule),
         "last_error": board.last_error,
     }
 

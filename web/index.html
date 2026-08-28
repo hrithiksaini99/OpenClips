@@ -528,6 +528,23 @@ const hourLabel = (hour) => {
   const suffix = hour < 12 ? 'am' : 'pm';
   return `${hour % 12 || 12}${suffix}`;
 };
+function whenLabel(iso) {
+  const at = new Date(iso);
+  const today = new Date();
+  const sameDay = at.toDateString() === today.toDateString();
+  const day = sameDay ? 'today'
+    : at.toLocaleDateString([], { weekday: 'short' });
+  return `${day} ${hourLabel(at.getHours())}`;
+}
+// Listing every hour turned a 24-slot schedule into an unreadable paragraph.
+function describeSlots(slots) {
+  if (!slots.length) return 'Pick at least one time';
+  const times = slots.map((time) => hourLabel(+time.split(':')[0]));
+  const shown = times.slice(0, 5).join(', ');
+  const rest = times.length - 5;
+  const when = rest > 0 ? `${shown} and ${rest} more` : shown;
+  return `<b>${slots.length} ${slots.length === 1 ? 'clip' : 'clips'} a day</b> — at ${when}`;
+}
 
 function showPubError(message) {
   const slot = $('pubSummary');
@@ -665,9 +682,13 @@ function renderSchedule() {
   const slots = schedule.slots || [];
   // The grid works in whole hours; a stored 09:30 lights up the 9 cell.
   const hours = new Set(slots.map((time) => parseInt(time.split(':')[0], 10)));
-  const state = schedule.enabled
-    ? `Armed · ${board.posted_today}/${board.daily_limit} posted today`
-    : 'Not running';
+  const next = (board.entries || []).map((e) => e.scheduled_for).filter(Boolean).sort()[0];
+  // "10 of 3 posted today" is what came of comparing a day's posts against a
+  // limit that had since been lowered; past the limit it just says so.
+  const today = board.posted_today >= board.daily_limit
+    ? `Done for today (${board.posted_today} posted)`
+    : `${board.posted_today} of ${board.daily_limit} posted today`;
+  const state = schedule.enabled ? `${today}${next ? ` · next ${whenLabel(next)}` : ''}` : 'Not running';
   $('schedCard').innerHTML = `
     <div class="row">
       <div><div class="acct-name">Schedule</div><div class="acct-sub">${state}</div></div>
@@ -685,18 +706,12 @@ function renderSchedule() {
         aria-pressed="${hours.has(hour)}" title="${hourLabel(hour)}">${hour}</button>`).join('')}
     </div>
     <div class="hour-legend"><span>midnight</span><span>noon</span><span>23:00</span></div>
-    <div class="slot-summary">${slots.length
-      ? `<b>${slots.length}</b> a day · ${slots.map((time) => hourLabel(+time.split(':')[0])).join(' · ')}`
-      : 'Pick at least one hour'}</div>
+    <div class="slot-summary">${describeSlots(slots)}</div>
     <div class="rule"></div>
-    <div style="display:flex;gap:12px;align-items:end">
-      <div class="field" style="flex:1"><label for="privacy">Visibility</label>
-        <select id="privacy">${PRIVACY.map((level) =>
-          `<option value="${level}" ${schedule.privacy === level ? 'selected' : ''}
-          >${level[0].toUpperCase() + level.slice(1)}</option>`).join('')}</select></div>
-      <div class="field" style="width:104px"><label for="perday">Per day</label>
-        <input id="perday" type="number" min="1" max="100" value="${schedule.daily_limit || 3}" /></div>
-    </div>
+    <div class="field"><label for="privacy">Visibility</label>
+      <select id="privacy">${PRIVACY.map((level) =>
+        `<option value="${level}" ${schedule.privacy === level ? 'selected' : ''}
+        >${level[0].toUpperCase() + level.slice(1)}</option>`).join('')}</select></div>
     <div class="note" style="margin-top:13px">Until your Google Cloud project passes YouTube's API
       audit, everything uploaded through it is locked to <b>private</b>, whatever this is set to.</div>
     <div class="rule"></div>
@@ -710,7 +725,6 @@ function renderSchedule() {
   $('armed').onchange = (event) => save({ enabled: event.target.checked });
   $('autoq').onchange = (event) => save({ auto_enqueue: event.target.checked });
   $('privacy').onchange = (event) => save({ privacy: event.target.value });
-  $('perday').onchange = (event) => save({ daily_limit: +event.target.value });
   $('hours').querySelectorAll('[data-hour]').forEach((cell) => {
     cell.onclick = () => {
       const hour = +cell.dataset.hour;
