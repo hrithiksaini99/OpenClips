@@ -11,6 +11,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from studio.captions import CaptionStyle
+from studio.tools import binary
 from studio.render import render_clip
 from studio.select import ClipCandidate, find_clips
 from studio.transcript import Word, build_sentences, load_words
@@ -102,9 +104,12 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
-            "yt-dlp", "--no-progress", "--newline",
+            binary("yt-dlp"), "--no-progress", "--newline",
             "-f", "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4]",
             "--merge-output-format", "mp4",
+            # yt-dlp shells out to FFmpeg to merge the streams, and it searches
+            # PATH, which does not include Homebrew in every launch context.
+            "--ffmpeg-location", binary("ffmpeg"),
             "-o", str(destination), "--", url,
         ],
         check=True,
@@ -115,31 +120,112 @@ def download(url: str, destination: Path, hook: ProgressHook) -> Path:
     return destination
 
 
-def transcribe(video: Path, model_size: str, hook: ProgressHook) -> list[Word]:
-    """Transcribe with faster-whisper, streaming progress as segments arrive."""
+CHUNK_SECONDS = 480.0
+# A `medium` model costs roughly 1.5 GB resident per process, so parallelism is
+# capped by model size rather than by CPU count alone.
+_MODEL_WORKER_CAP = {"tiny": 8, "base": 8, "small": 6, "medium": 3, "large-v3": 2}
+
+
+def _extract_audio(video: Path, destination: Path) -> float:
+    """Write mono 16 kHz PCM (what Whisper wants) and return its duration."""
+    subprocess.run(
+        [
+            binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-i", str(video),
+            "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le",
+            str(destination),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=3600,
+    )
+    completed = subprocess.run(
+        [
+            binary("ffprobe"), "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=nw=1:nk=1", str(destination),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    return float(completed.stdout.strip())
+
+
+def _transcribe_chunk(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Worker entry point: transcribe one audio slice and rebase its timings."""
     from faster_whisper import WhisperModel
 
-    hook("transcribe", 0.15, f"Loading {model_size} speech model…")
-    model = WhisperModel(model_size, device="cpu", compute_type="int8")
-    segments, info = model.transcribe(
-        str(video), word_timestamps=True, vad_filter=True, beam_size=1,
+    model = WhisperModel(payload["model"], device="cpu", compute_type="int8")
+    segments, _info = model.transcribe(
+        payload["audio"],
+        word_timestamps=True,
+        vad_filter=True,
+        beam_size=1,
+        clip_timestamps=[payload["start"], payload["end"]],
     )
-    total = float(info.duration) or 1.0
-    words: list[Word] = []
+    words: list[dict[str, Any]] = []
     for segment in segments:
         for raw in segment.words or []:
             text = str(raw.word).strip()
-            if text:
-                words.append(
-                    Word(
-                        text=text,
-                        start=float(raw.start),
-                        end=max(float(raw.start), float(raw.end)),
-                        probability=float(getattr(raw, "probability", 1.0)),
-                    )
+            if not text:
+                continue
+            start = float(raw.start)
+            words.append(
+                {
+                    "text": text,
+                    "start": start,
+                    "end": max(start, float(raw.end)),
+                    "probability": float(getattr(raw, "probability", 1.0)),
+                }
+            )
+    return words
+
+
+def transcribe(
+    video: Path, model_size: str, hook: ProgressHook, workers: int = 4
+) -> list[Word]:
+    """Transcribe by splitting the audio and running slices in parallel processes."""
+    hook("transcribe", 0.12, "Extracting audio…")
+    with tempfile.TemporaryDirectory(prefix="openclips-audio-") as temporary:
+        audio = Path(temporary) / "audio.wav"
+        duration = _extract_audio(video, audio)
+
+        bounds: list[tuple[float, float]] = []
+        cursor = 0.0
+        while cursor < duration:
+            bounds.append((cursor, min(cursor + CHUNK_SECONDS, duration)))
+            cursor += CHUNK_SECONDS
+
+        parallel = max(1, min(workers, _MODEL_WORKER_CAP.get(model_size, 4), len(bounds)))
+        hook(
+            "transcribe",
+            0.15,
+            f"Transcribing {duration / 60:.0f} min with {model_size} × {parallel} workers…",
+        )
+
+        payloads = [
+            {"audio": str(audio), "model": model_size, "start": start, "end": end}
+            for start, end in bounds
+        ]
+        collected: list[list[dict[str, Any]]] = [[] for _ in payloads]
+        done = 0
+        with ProcessPoolExecutor(max_workers=parallel) as pool:
+            futures = {
+                pool.submit(_transcribe_chunk, payload): index
+                for index, payload in enumerate(payloads)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                collected[index] = future.result()
+                done += 1
+                hook(
+                    "transcribe",
+                    0.15 + 0.45 * (done / len(payloads)),
+                    f"Transcribed {done}/{len(payloads)} segments",
                 )
-        share = min(segment.end / total, 1.0)
-        hook("transcribe", 0.15 + share * 0.45, f"Transcribing… {share * 100:.0f}%")
+
+    words = [Word(**word) for chunk in collected for word in chunk]
+    words.sort(key=lambda word: (word.start, word.end))
     return words
 
 
@@ -158,7 +244,7 @@ def _render_one(payload: dict[str, Any]) -> dict[str, Any]:
     thumbnail = Path(payload["destination"]).with_suffix(".jpg")
     subprocess.run(
         [
-            "ffmpeg", "-nostdin", "-v", "error", "-y",
+            binary("ffmpeg"), "-nostdin", "-v", "error", "-y",
             "-ss", "1", "-i", payload["destination"],
             "-frames:v", "1", "-vf", "scale=360:-2", str(thumbnail),
         ],
@@ -203,7 +289,7 @@ def run_job(
             report("transcribe", 0.55, "Loading existing transcript…")
             words = load_words(transcript_path)
         else:
-            words = transcribe(video, model_size, report)
+            words = transcribe(video, model_size, report, workers=workers)
         if not words:
             raise RuntimeError("Transcription produced no words")
 

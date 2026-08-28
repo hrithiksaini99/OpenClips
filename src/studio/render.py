@@ -10,6 +10,7 @@ from pathlib import Path
 
 from studio.captions import CaptionStyle, render_caption_track
 from studio.framing import plan_crop
+from studio.tools import binary
 from studio.transcript import Word
 
 OUT_WIDTH = 1080
@@ -32,7 +33,7 @@ class RenderResult:
 def probe_dimensions(video: Path) -> tuple[int, int]:
     completed = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            binary("ffprobe"), "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height", "-of", "json", str(video),
         ],
         check=True,
@@ -96,7 +97,7 @@ def render_clip(
         )
         subprocess.run(
             [
-                "ffmpeg", "-nostdin", "-v", "error", "-y",
+                binary("ffmpeg"), "-nostdin", "-v", "error", "-y",
                 "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source),
                 "-framerate", str(track.fps), "-i", str(track.directory / "cap-%05d.png"),
                 "-filter_complex", filtergraph,

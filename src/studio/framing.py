@@ -14,6 +14,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from studio.tools import binary
+
 SAMPLE_FPS = 2.0
 SAMPLE_WIDTH = 480
 SEGMENT_SECONDS = 3.0
@@ -54,7 +56,7 @@ def _detect_centers(video: Path, start: float, duration: float) -> list[tuple[fl
         directory = Path(temporary)
         subprocess.run(
             [
-                "ffmpeg", "-nostdin", "-v", "error",
+                binary("ffmpeg"), "-nostdin", "-v", "error",
                 "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(video),
                 "-vf", f"fps={SAMPLE_FPS},scale={SAMPLE_WIDTH}:-2",
                 "-q:v", "4", str(directory / "f-%05d.jpg"),
