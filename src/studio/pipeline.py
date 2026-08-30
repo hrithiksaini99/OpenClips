@@ -260,9 +260,9 @@ def _yt_dlp_flags() -> list[str]:
 _YT_DLP_HINTS = (
     (
         "HTTP Error 429",
-        "YouTube is rate-limiting this machine, not rejecting the link. It clears "
-        "on its own, usually within the hour. Downloading less often, or setting "
-        "OPENCLIPS_COOKIES_FROM_BROWSER, avoids it.",
+        "YouTube is rate-limiting this machine, not rejecting the link. It usually "
+        "lapses within a few minutes and the download is retried automatically; if "
+        "it keeps happening, set OPENCLIPS_COOKIES_FROM_BROWSER.",
     ),
     (
         "not a bot",
@@ -295,6 +295,11 @@ def is_rate_limited(output: str) -> bool:
     """True when retrying now would only make it worse."""
     return "HTTP Error 429" in output or "not a bot" in output
 
+
+# A rate limit usually lapses in a couple of minutes, so it is waited out
+# rather than failing a job that was minutes from starting.
+RATE_LIMIT_ATTEMPTS = 3
+RATE_LIMIT_WAIT = 60.0
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio"
 VIDEO_FORMAT = "bestvideo[ext=mp4][height<=1080]/best[ext=mp4]"
@@ -357,17 +362,37 @@ def _download_stream(
         if hook is not None:
             hook("download", span[1], f"Reusing cached {label}")
         return destination
-    try:
-        return _run_yt_dlp(url, fmt=fmt, destination=destination, label=label, hook=hook, span=span)
-    except RuntimeError as error:
-        # Being rate-limited is not something a newer yt-dlp fixes, and trying
-        # again immediately is what earned the limit. Fail with the explanation
-        # rather than spending a pip install and another request on it.
-        if is_rate_limited(str(error)) or not _upgrade_yt_dlp():
-            raise
-        if hook is not None:
-            hook("download", span[0], f"Updated yt-dlp, retrying {label}…")
-        return _run_yt_dlp(url, fmt=fmt, destination=destination, label=label, hook=hook, span=span)
+
+    upgraded = False
+    for attempt in range(RATE_LIMIT_ATTEMPTS):
+        try:
+            return _run_yt_dlp(
+                url, fmt=fmt, destination=destination, label=label, hook=hook, span=span
+            )
+        except RuntimeError as error:
+            last = attempt == RATE_LIMIT_ATTEMPTS - 1
+            if is_rate_limited(str(error)):
+                # The limit is usually a passing squall rather than a wall, so
+                # it is waited out. A newer yt-dlp does not fix it and trying
+                # again straight away is what earned it.
+                if last:
+                    raise
+                wait = RATE_LIMIT_WAIT * (attempt + 1)
+                if hook is not None:
+                    hook(
+                        "download", span[0],
+                        f"YouTube is rate-limiting; waiting {wait:.0f}s before retrying {label}…",
+                    )
+                time.sleep(wait)
+                continue
+            # Any other failure is usually a YouTube-side change upstream has
+            # already fixed, so it is worth one upgrade and one more go.
+            if upgraded or last or not _upgrade_yt_dlp():
+                raise
+            upgraded = True
+            if hook is not None:
+                hook("download", span[0], f"Updated yt-dlp, retrying {label}…")
+    raise RuntimeError(f"Could not fetch the {label}")
 
 
 def _run_yt_dlp(
@@ -384,9 +409,15 @@ def _run_yt_dlp(
             binary("yt-dlp"), "--newline", "--no-playlist", "-f", fmt,
             *_yt_dlp_flags(),
             # YouTube throttles a single DASH connection hard (~0.6 MB/s on a
-            # 2 GB stream); concurrent fragments are several times faster.
-            "--concurrent-fragments", "8",
+            # 2 GB stream), so fragments are fetched in parallel. Four rather
+            # than eight: audio and video download at once, so this is doubled
+            # in practice, and sixteen parallel requests is what earns a 429.
+            "--concurrent-fragments", "4",
             "--retries", "10", "--fragment-retries", "10",
+            # Back off inside the run rather than giving up on the first refusal.
+            "--retry-sleep", "http:exp=1:120",
+            "--extractor-retries", "3",
+            "--sleep-requests", "1",
             "--ffmpeg-location", binary("ffmpeg"),
             "-o", str(destination), "--", url,
         ],

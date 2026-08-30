@@ -138,9 +138,11 @@ middle, so the studio picks that sentence out and leads with it. Three are worth
 knowing about:
 
 - **`HTTP Error 429: Too Many Requests`** — YouTube is rate-limiting the
-  machine, not rejecting the link. It clears on its own, usually within the
-  hour, and affects every video rather than one. A download that fails this way
-  is not retried: retrying immediately is what earned the limit.
+  machine, not rejecting the link; it affects every video rather than one. It is
+  usually a passing squall, so the download waits and retries by itself, backing
+  off further each time. Requests are paced and fragments limited to four per
+  stream to avoid provoking it in the first place — audio and video download at
+  once, so that is eight in flight, and sixteen was enough to earn the limit.
 - **"Sign in to confirm you're not a bot"** — the download needs to be
   authenticated. Point the studio at your browser's cookies:
 
