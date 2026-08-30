@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from studio.metadata import (
     DESCRIPTION_LIMIT,
+    DISCLAIMER,
     MAX_HASHTAGS,
     TAG_BUDGET,
     TITLE_LIMIT,
@@ -86,11 +87,38 @@ def test_the_description_credits_the_source_episode() -> None:
     assert "https://youtu.be/abcdefghijk" in description
 
 
-def test_the_description_holds_without_a_source() -> None:
-    assert compose_description("Body only.") == "Body only."
+def test_a_description_without_a_source_still_carries_the_disclaimer() -> None:
+    description = compose_description("Body only.")
+
+    assert description.startswith("Body only.")
+    assert "Clipped from" not in description
+    assert DISCLAIMER in description
 
 
 def test_an_overlong_description_is_truncated() -> None:
     description = compose_description("word " * 4000, source_title="Ep")
 
     assert len(description) <= DESCRIPTION_LIMIT
+
+
+def test_every_description_carries_the_copyright_disclaimer() -> None:
+    assert DISCLAIMER in compose_description("Body.")
+
+
+def test_the_disclaimer_survives_a_description_that_runs_long() -> None:
+    # Trimming the whole description to length would drop the disclaimer and the
+    # credit off the end, which are the two parts that must always be present.
+    description = compose_description(
+        "word " * 4000, source_title="Episode 12", source_url="https://youtu.be/abcdefghijk"
+    )
+
+    assert len(description) <= DESCRIPTION_LIMIT
+    assert DISCLAIMER in description
+    assert "Episode 12" in description
+
+
+def test_the_disclaimer_wording_can_be_replaced() -> None:
+    description = compose_description("Body.", disclaimer="Used with permission.")
+
+    assert "Used with permission." in description
+    assert DISCLAIMER not in description

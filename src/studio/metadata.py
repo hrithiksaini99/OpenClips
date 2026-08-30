@@ -12,6 +12,7 @@ matter.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 
@@ -135,6 +136,18 @@ def normalise_hashtags(raw: object, limit: int = MAX_HASHTAGS) -> tuple[str, ...
     return tuple(tags)
 
 
+# Overridable the same way the model and host are, so a channel can use its own
+# wording and its own contact address without editing the source.
+DISCLAIMER = os.environ.get(
+    "OPENCLIPS_DISCLAIMER",
+    "Copyright disclaimer: this clip is shared for commentary, criticism and "
+    "educational purposes. All rights to the original material remain with its "
+    "copyright holders, and no ownership is claimed. If you hold the rights to "
+    "this material and would like it taken down, contact the channel and it will "
+    "be removed promptly.",
+)
+
+
 def _credit(source_title: str, source_url: str) -> str:
     """The attribution line.
 
@@ -153,13 +166,26 @@ def compose_description(
     hashtags: tuple[str, ...] = (),
     source_title: str = "",
     source_url: str = "",
+    disclaimer: str | None = None,
 ) -> str:
-    """Assemble the final description: the model's text, hashtags, attribution."""
-    blocks = [" ".join(str(body).split())]
-    if hashtags:
-        blocks.append(" ".join(hashtags))
-    blocks.append(_credit(source_title, source_url))
-    return "\n\n".join(block for block in blocks if block)[:DESCRIPTION_LIMIT]
+    """Assemble the description: the model's text, hashtags, credit, disclaimer.
+
+    The credit and the disclaimer go on every post without exception, so neither
+    depends on what the model returned.
+    """
+    tail = [
+        " ".join(hashtags) if hashtags else "",
+        _credit(source_title, source_url),
+        disclaimer if disclaimer is not None else DISCLAIMER,
+    ]
+    joined_tail = "\n\n".join(block for block in tail if block)
+    # The tail is assembled first and the body trimmed to fit around it. Cutting
+    # the whole description to length instead would drop the credit and the
+    # disclaimer off the end of a long one, which are the two parts that must
+    # appear on every post.
+    room = DESCRIPTION_LIMIT - len(joined_tail) - 2
+    trimmed = " ".join(str(body).split())[: max(0, room)]
+    return "\n\n".join(block for block in (trimmed, joined_tail) if block)
 
 
 def _fallback_body(text: str) -> str:

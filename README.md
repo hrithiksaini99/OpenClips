@@ -170,8 +170,22 @@ Two smaller things worth knowing:
   a limit of 100 calls a day, separate from the 10,000-unit pool everything else
   draws on. Three posts a day is nowhere near it.
 - These clips are cut from somebody else's episode. That is what the audit looks
-  hardest at, and it is a risk to the audit and to the channel. Every generated
-  description credits the source episode by name and link.
+  hardest at, and it is a risk to the audit and to the channel.
+
+Two things are therefore appended to every description by the code, never asked
+for in the prompt: the **source credit** (episode title and original URL) and a
+**copyright disclaimer**. Neither depends on what the model returned, and the
+body is trimmed to fit around them rather than the description being cut to
+length, so a long description cannot drop either one. The wording lives in
+`DISCLAIMER` in `src/studio/metadata.py` and can be replaced without touching the
+source:
+
+```bash
+export OPENCLIPS_DISCLAIMER="Your own wording and contact address."
+```
+
+A disclaimer is a courtesy and a takedown route. It is not a legal defence and
+does not by itself create fair use — how the clip is actually used decides that.
 
 ### Setting it up
 
