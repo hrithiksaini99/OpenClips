@@ -79,8 +79,15 @@ class PostMetadata:
 
 
 def _flatten(text: str) -> str:
-    """Lowercase, strip punctuation, collapse spaces — for comparing wording."""
-    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", str(text).lower()).split())
+    """Lowercase, strip punctuation, collapse spaces — for comparing wording.
+
+    Apostrophes are removed rather than turned into spaces: transcripts are not
+    consistent about them, so "don't" in a title and "dont" in the transcript
+    have to compare equal or the quote guard misses the very lines it exists to
+    catch.
+    """
+    without_apostrophes = re.sub(r"['‘’`]", "", str(text).lower())
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", without_apostrophes).split())
 
 
 def is_quote(title: str, transcript: str) -> bool:
