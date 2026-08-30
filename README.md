@@ -441,4 +441,11 @@ effects, and no posting to anywhere but YouTube.
 
 ## Licence
 
-Undecided.
+[MIT](LICENSE). Use it, change it, ship it; keep the copyright notice.
+
+Every dependency is permissive too — MIT, BSD, Apache-2.0 or the Unlicense — so
+nothing here restricts what you do with it. One caveat if you package a build:
+FFmpeg is invoked as a separate program rather than linked, so its licence does
+not reach this code, but a bundle that ships an FFmpeg binary built with
+`--enable-gpl` (which includes libx264 and libx265) is distributing GPL software
+and carries that binary's obligations.
