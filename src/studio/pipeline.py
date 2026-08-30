@@ -20,6 +20,7 @@ import uuid
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -180,6 +181,7 @@ def resolve_episode(url: str, hook: ProgressHook) -> str:
     completed = subprocess.run(
         [
             binary("yt-dlp"), "--flat-playlist", "--playlist-end", "1",
+            *_yt_dlp_flags(),
             "--print", "%(id)s\t%(title)s", "--", url,
         ],
         check=True,
@@ -201,7 +203,7 @@ def video_title(url: str) -> str:
         completed = subprocess.run(
             [
                 binary("yt-dlp"), "--skip-download", "--print", "%(title)s",
-                "--no-playlist", "--", url,
+                *_yt_dlp_flags(), "--no-playlist", "--", url,
             ],
             check=True,
             capture_output=True,
@@ -211,6 +213,87 @@ def video_title(url: str) -> str:
         return completed.stdout.strip().splitlines()[0][:120]
     except Exception:
         return ""
+
+
+# yt-dlp enables only Deno by default, and YouTube extraction without a JS
+# runtime is deprecated, so whatever is installed gets used.
+_JS_RUNTIMES = ("deno", "node", "bun")
+
+
+@lru_cache(maxsize=1)
+def js_runtime() -> str:
+    """The name of an installed JavaScript runtime, or "" if there is none."""
+    for name in _JS_RUNTIMES:
+        if shutil.which(name):
+            return name
+    return ""
+
+
+def _auth_flags() -> list[str]:
+    """Cookies for YouTube, when the machine has been told where to find them.
+
+    YouTube increasingly answers an unauthenticated download with "sign in to
+    confirm you're not a bot". Cookies are the documented fix, but they are the
+    user's live session, so nothing is read unless one of these is set
+    deliberately.
+    """
+    browser = os.environ.get("OPENCLIPS_COOKIES_FROM_BROWSER", "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    jar = os.environ.get("OPENCLIPS_COOKIES_FILE", "").strip()
+    if jar:
+        return ["--cookies", jar]
+    return []
+
+
+def _yt_dlp_flags() -> list[str]:
+    """Flags every yt-dlp invocation should carry."""
+    flags = _auth_flags()
+    runtime = js_runtime()
+    if runtime:
+        flags += ["--js-runtimes", runtime]
+    return flags
+
+
+# Signatures worth translating: yt-dlp's own output is a dozen lines of warnings
+# with the one actionable sentence buried in the middle.
+_YT_DLP_HINTS = (
+    (
+        "HTTP Error 429",
+        "YouTube is rate-limiting this machine, not rejecting the link. It clears "
+        "on its own, usually within the hour. Downloading less often, or setting "
+        "OPENCLIPS_COOKIES_FROM_BROWSER, avoids it.",
+    ),
+    (
+        "not a bot",
+        "YouTube wants this download signed in. Set OPENCLIPS_COOKIES_FROM_BROWSER "
+        "to the browser you watch YouTube in (chrome, firefox, safari, edge, brave), "
+        "or OPENCLIPS_COOKIES_FILE to an exported cookies.txt.",
+    ),
+    (
+        "No supported JavaScript runtime",
+        "yt-dlp needs a JavaScript runtime for YouTube. Install Deno or Node and it "
+        "will be picked up automatically.",
+    ),
+    (
+        "Video unavailable",
+        "YouTube says this video is unavailable — private, deleted, or blocked in "
+        "this region.",
+    ),
+)
+
+
+def diagnose_download(output: str) -> str:
+    """Turn yt-dlp's output into the one sentence that explains the failure."""
+    for signature, explanation in _YT_DLP_HINTS:
+        if signature in output:
+            return explanation
+    return ""
+
+
+def is_rate_limited(output: str) -> bool:
+    """True when retrying now would only make it worse."""
+    return "HTTP Error 429" in output or "not a bot" in output
 
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio"
@@ -276,8 +359,11 @@ def _download_stream(
         return destination
     try:
         return _run_yt_dlp(url, fmt=fmt, destination=destination, label=label, hook=hook, span=span)
-    except RuntimeError:
-        if not _upgrade_yt_dlp():
+    except RuntimeError as error:
+        # Being rate-limited is not something a newer yt-dlp fixes, and trying
+        # again immediately is what earned the limit. Fail with the explanation
+        # rather than spending a pip install and another request on it.
+        if is_rate_limited(str(error)) or not _upgrade_yt_dlp():
             raise
         if hook is not None:
             hook("download", span[0], f"Updated yt-dlp, retrying {label}…")
@@ -296,6 +382,7 @@ def _run_yt_dlp(
     process = subprocess.Popen(
         [
             binary("yt-dlp"), "--newline", "--no-playlist", "-f", fmt,
+            *_yt_dlp_flags(),
             # YouTube throttles a single DASH connection hard (~0.6 MB/s on a
             # 2 GB stream); concurrent fragments are several times faster.
             "--concurrent-fragments", "8",
@@ -327,7 +414,10 @@ def _run_yt_dlp(
             detail += f" \u00b7 ETA {eta}"
         hook("download", low + (high - low) * share, f"Downloading {label} {detail}")
     if process.wait() != 0:
-        raise RuntimeError(f"yt-dlp failed fetching {label}:\n" + "\n".join(tail))
+        output = "\n".join(tail)
+        hint = diagnose_download(output)
+        headline = f"Could not fetch the {label}"
+        raise RuntimeError(f"{headline}. {hint}\n\n{output}" if hint else f"{headline}:\n{output}")
     return destination
 
 

@@ -131,6 +131,29 @@ Transcription runs on the CPU by default. On an NVIDIA card, CTranslate2 support
 CUDA and `large-v3` at int8 needs roughly 2.5 GB of VRAM. On Apple Silicon
 CTranslate2 has no Metal backend, so the CPU path is used there.
 
+## When YouTube refuses the download
+
+yt-dlp reports a refusal as a dozen warnings with one actionable sentence in the
+middle, so the studio picks that sentence out and leads with it. Three are worth
+knowing about:
+
+- **`HTTP Error 429: Too Many Requests`** — YouTube is rate-limiting the
+  machine, not rejecting the link. It clears on its own, usually within the
+  hour, and affects every video rather than one. A download that fails this way
+  is not retried: retrying immediately is what earned the limit.
+- **"Sign in to confirm you're not a bot"** — the download needs to be
+  authenticated. Point the studio at your browser's cookies:
+
+  ```bash
+  export OPENCLIPS_COOKIES_FROM_BROWSER=chrome   # or firefox, safari, edge, brave
+  ```
+
+  or `OPENCLIPS_COOKIES_FILE=/path/to/cookies.txt` for an exported jar. Nothing
+  is read unless one of these is set: they are your live YouTube session.
+- **"No supported JavaScript runtime"** — YouTube extraction needs one, and
+  yt-dlp enables only Deno by default. Install Deno, Node or Bun and it is found
+  and passed automatically.
+
 ## Troubleshooting
 
 **`Required tool 'yt-dlp' was not found`** — install it into the same virtualenv
