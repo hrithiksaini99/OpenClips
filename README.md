@@ -93,23 +93,109 @@ export OPENCLIPS_OLLAMA_HOST=http://localhost:11434
 Pick a model that fits your VRAM. On a 4 GB card a ~4B model is appropriate; a
 larger one still works but runs on the CPU, adding a minute or two per episode.
 
-## How it works
+## Design
 
-```
-URL ─┬─> audio  ──> transcribe ──> sentences ──> shortlist ──> LLM rank ─┐
-     └─> video  ─────────────────────────────────────────────────────────┴─> render
+Two halves that meet at a rendered file. The first turns one long episode into
+clips; the second writes a post for each clip and puts it on YouTube on a
+schedule. They share nothing but the folder the clips land in, so either can be
+used without the other.
+
+```mermaid
+flowchart TD
+    A["Episode<br/>URL or local file"] --> MAKE["<b>Making clips</b><br/>download · transcribe · select · render"]
+    MAKE --> CLIPS["clips/&lt;job&gt;/ · 9:16 MP4s"]
+    CLIPS --> POST["<b>Posting them</b><br/>write the post · queue · schedule"]
+    POST --> YT["YouTube"]
+    YT --> DEL["Local copy deleted"]
 ```
 
-1. **Download** — audio and video are fetched concurrently as separate streams
-   and never merged. Audio is small, so transcription starts while the video is
-   still arriving.
-2. **Transcribe** — faster-whisper with word-level timestamps, run over parallel
-   slices sharing one model instance.
-3. **Select** — words are grouped into sentences; whole-sentence spans are scored
-   on hook strength, substance, speech density and length.
-4. **Rank** — an optional local LLM picks the final set and titles them.
-5. **Render** — per clip, in parallel: face-tracked crop, caption overlay,
-   loudness normalisation.
+### Making clips
+
+The shape of this stage is set by one fact: the audio is about 150 MB and the
+video about 2.7 GB. Fetching them as separate streams means transcription — the
+other slow stage — starts on the audio while the video is still arriving, so the
+two longest parts of the job overlap instead of queueing.
+
+```mermaid
+flowchart TD
+    URL["Episode URL<br/>a channel link resolves to its latest"] --> DL["yt-dlp · two streams at once"]
+    DL --> AUD["audio · ~150 MB"]
+    DL --> VID["video · ~2.7 GB"]
+    AUD --> TR["Transcribe<br/>word-level timestamps"]
+    TR --> SEL["Pick the clips<br/>whole-sentence spans, scored,<br/>then ranked and titled by Gemma"]
+    SEL --> REN["Render<br/>one process per clip"]
+    VID -- "must have finished by here" --> REN
+    REN --> OUT["9:16 MP4 · burned-in captions<br/>face-tracked crop · −14 LUFS"]
+```
+
+Three choices are worth knowing about:
+
+- **Clips start and end on sentences.** Spans are built from whole sentences
+  rather than fixed windows, which is what stops a clip opening mid-thought.
+- **The model reads a shortlist.** The heuristics find spans that are well
+  formed and energetic; they cannot tell whether a moment is interesting. Three
+  times as many candidates as needed go to Gemma, which picks and titles them.
+- **Rendering is process-parallel, transcription is thread-parallel.** Whisper
+  slices share one model instance because the weights dominate memory; FFmpeg
+  work does not share anything, so it gets real processes, as many as free
+  memory allows.
+
+### Posting them
+
+Each clip becomes a queue entry with a post written for it. A thread wakes every
+30 seconds, and if a configured time of day has come round, it posts one clip.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: Gemma writes the<br/>title, description, hashtags
+    pending --> uploading: a slot comes due<br/>or Publish now
+    uploading --> posted: YouTube returns a video id
+    uploading --> pending: upload failed · try at the next slot
+    uploading --> pending: channel's daily cap ·<br/>queue stands down 2h
+    pending --> failed: three failures
+    failed --> pending: Publish now
+    posted --> [*]: local file deleted,<br/>clip leaves the grid
+```
+
+The entry is marked `uploading` **before** the upload starts, not after. That is
+what stops a scheduler tick landing mid-click from posting the same clip twice.
+
+### Where state lives
+
+Everything is a JSON file next to the media it describes, so the whole system is
+readable from Finder and survives a restart without a database.
+
+| Path | Holds | Written by |
+|---|---|---|
+| `clips/<job>/job.json` | one run: stage, progress, and a record per clip | the job thread, several times a second |
+| `clips/<job>/*.mp4` | the rendered clips, and their thumbnails | the render workers |
+| `clips/publish.json` | the schedule, the queue, storage settings | the scheduler and the API |
+| `media/source/<video-id>.*` | downloaded episodes, keyed by video so a re-run reuses them | yt-dlp |
+| `config/` | the YouTube OAuth client and refresh token | the OAuth callback |
+
+Both state files are written to a temporary sibling and renamed, so a reader
+never sees a half-written file. That is not theoretical: a plain write let the UI
+read a truncated `job.json`, which returned a 500 and killed its polling loop.
+
+### When something goes wrong
+
+Nothing here retries blindly, because the useful response depends on what failed.
+
+| What happened | What it does |
+|---|---|
+| YouTube rate-limits a download | Waits 60s, then 120s, and says so on the progress bar. An upgrade is never spent on it — it cannot fix a limit |
+| The channel's daily upload cap | The clip keeps its file and spends no attempt; the whole queue stands down for two hours |
+| An upload interrupted by a restart | On startup, asks YouTube what actually landed, records those, re-queues only the rest |
+| A single upload fails | Retried at the next slot, parked after three attempts with the reason on screen |
+| Ollama is not running | Falls back to heuristic titles and a plain description; no clip is lost |
+| A custom thumbnail is refused | Noted against the entry; the video is already up and stays up |
+| A run fails, or its clips are all posted | The empty job folder is cleared out on the next start |
+
+The interrupted-upload case is the one that bites hardest. An entry is claimed
+before its upload begins, so a process that dies leaves it claimed forever unless
+something releases it — and releasing it blindly is worse, because the clip may
+have reached YouTube with only the bookkeeping lost. Reconciling against the
+channel is the only answer that neither strands the entry nor posts it twice.
 
 ## Performance
 
