@@ -7,7 +7,7 @@ name = "openclips"
 version = "0.1.0"
 description = "Self-hosted long-form video to short-form clips platform (foundation)."
 readme = "README.md"
-license = "MIT"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 authors = [{ name = "Hrithik Saini" }]
 requires-python = ">=3.11"

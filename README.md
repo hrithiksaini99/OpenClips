@@ -441,11 +441,32 @@ effects, and no posting to anywhere but YouTube.
 
 ## Licence
 
-[MIT](LICENSE). Use it, change it, ship it; keep the copyright notice.
+[GNU Affero General Public License v3.0](LICENSE).
 
-Every dependency is permissive too — MIT, BSD, Apache-2.0 or the Unlicense — so
-nothing here restricts what you do with it. One caveat if you package a build:
-FFmpeg is invoked as a separate program rather than linked, so its licence does
-not reach this code, but a bundle that ships an FFmpeg binary built with
-`--enable-gpl` (which includes libx264 and libx265) is distributing GPL software
-and carries that binary's obligations.
+You may use, study, modify and redistribute this, and any redistribution — or
+any modified version you let people reach over a network — has to be offered
+under the same licence, with source. That last part is the point of the Affero
+clause: running a modified copy as a service counts as distribution.
+
+Every dependency is permissive (MIT, BSD, Apache-2.0, Unlicense), so none of
+them conflicts. FFmpeg is invoked as a separate program rather than linked, so
+its licence does not reach this code either — though a packaged build that ships
+an FFmpeg binary built with `--enable-gpl` is distributing GPL software and
+carries that binary's own obligations.
+
+```
+OpenClips — podcasts into postable vertical clips
+Copyright (C) 2026 Hrithik Saini
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+```
