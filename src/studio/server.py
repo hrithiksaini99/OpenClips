@@ -31,6 +31,9 @@ _SLOT = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Nothing is running yet, so any job folder without clips is the remains of
+    # a run that failed or one whose clips have all been posted.
+    pipeline.prune_empty_jobs()
     # Anything left "uploading" belongs to a process that is no longer running,
     # so it is returned to the queue (reconciled against YouTube first).
     recovered = publisher.recover_stalled()
@@ -94,6 +97,9 @@ def create_job(request: JobRequest, background: BackgroundTasks) -> dict[str, An
     thread = threading.Thread(target=run, daemon=True)
     _running[job_id] = thread
     thread.start()
+    # Clear out what previous runs left behind, now rather than the moment they
+    # failed: an error stays on screen until the next run is started.
+    pipeline.prune_empty_jobs(keep={job_id, *_running})
     return {"id": job_id}
 
 

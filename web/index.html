@@ -375,6 +375,15 @@ async function api(path, options) {
   return response.json();
 }
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+// A job with no title yet is identified by its video id: "youtube.com/watch?"
+// is the same for every one of them and says nothing.
+function jobLabel(job) {
+  const id = (job.source.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/) || [])[1];
+  const name = job.title || (id ? `Video ${id}` : job.source.slice(0, 34));
+  if (job.status === 'error') return `${name} · failed`;
+  if (job.status === 'running' || job.status === 'queued') return `${name} · working…`;
+  return `${name} · ${job.clips.length} clip${job.clips.length === 1 ? '' : 's'}`;
+}
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function paintSteps(job) {
@@ -481,7 +490,7 @@ async function loadJobs() {
   const jobs = await api('/api/jobs');
   $('jobs').innerHTML = jobs.map((job) => `
     <button type="button" class="chip" data-id="${job.id}" aria-current="${job.id === current}">
-      ${esc(job.title || job.source.slice(0, 30))} · ${job.clips.length} clips
+      ${esc(jobLabel(job))}
     </button>`).join('');
   $('jobs').querySelectorAll('button').forEach((button) => {
     button.onclick = async () => { clipSignature = ''; await poll(button.dataset.id); loadJobs(); };

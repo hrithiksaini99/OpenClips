@@ -133,3 +133,36 @@ def test_job_state_is_written_whole_or_not_at_all(studio_home: Path) -> None:
 
     assert target.read_text().count('"a"') == 1
     assert list(pipeline.CLIPS_DIR.glob(".state.json.*")) == []
+
+
+def test_a_job_with_no_clips_is_not_kept(
+    studio_home: Path, make_job: Callable[..., pipeline.JobState]
+) -> None:
+    # A failed run and one whose clips have all been posted both leave an empty
+    # folder that shows up in the job list as a row leading nowhere.
+    failed = pipeline.JobState(id="failed", source="https://youtu.be/x", status="error",
+                               error="RuntimeError: rate limited")
+    pipeline.write_state(failed)
+    make_job(job_id="kept", clips=2)
+
+    removed = pipeline.prune_empty_jobs()
+
+    assert removed == 1
+    assert [job.id for job in pipeline.list_jobs()] == ["kept"]
+
+
+def test_a_job_still_running_is_never_pruned(studio_home: Path) -> None:
+    running = pipeline.JobState(id="live", source="https://youtu.be/x", status="running")
+    pipeline.write_state(running)
+
+    assert pipeline.prune_empty_jobs(keep={"live"}) == 0
+    assert [job.id for job in pipeline.list_jobs()] == ["live"]
+
+
+def test_pruning_an_already_clean_list_does_nothing(
+    studio_home: Path, make_job: Callable[..., pipeline.JobState]
+) -> None:
+    make_job(clips=1)
+
+    assert pipeline.prune_empty_jobs() == 0
+    assert len(pipeline.list_jobs()) == 1

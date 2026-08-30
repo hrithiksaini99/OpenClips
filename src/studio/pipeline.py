@@ -979,6 +979,25 @@ def disk_usage() -> dict[str, int]:
     return {"media": total(MEDIA_DIR), "clips": total(CLIPS_DIR)}
 
 
+def prune_empty_jobs(keep: set[str] | None = None) -> int:
+    """Delete job folders that hold no clips. Returns how many went.
+
+    A run that failed and a run whose clips have all been posted and reclaimed
+    both leave an empty folder behind, and they pile up in the job list as rows
+    that lead nowhere. Only `keep` is protected, so the caller decides what is
+    still in flight rather than this guessing from a status that a killed
+    process may have left behind.
+    """
+    protected = keep or set()
+    removed = 0
+    for job in list_jobs():
+        if job.id in protected or job.clips:
+            continue
+        clear_job(job.id)
+        removed += 1
+    return removed
+
+
 def clear_job(job_id: str) -> None:
     shutil.rmtree(job_dir(job_id), ignore_errors=True)
 

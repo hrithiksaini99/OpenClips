@@ -131,6 +131,13 @@ Transcription runs on the CPU by default. On an NVIDIA card, CTranslate2 support
 CUDA and `large-v3` at int8 needs roughly 2.5 GB of VRAM. On Apple Silicon
 CTranslate2 has no Metal backend, so the CPU path is used there.
 
+## The job list
+
+Only runs that produced clips are kept. A run that failed, and one whose clips
+have all been posted and reclaimed, leave an empty folder behind, and those are
+cleared out when the server starts and when the next run begins — not the moment
+they fail, so an error stays on screen until you start something else.
+
 ## When YouTube refuses the download
 
 yt-dlp reports a refusal as a dozen warnings with one actionable sentence in the
