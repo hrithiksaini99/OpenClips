@@ -266,9 +266,11 @@ _YT_DLP_HINTS = (
     ),
     (
         "not a bot",
-        "YouTube wants this download signed in. Set OPENCLIPS_COOKIES_FROM_BROWSER "
-        "to the browser you watch YouTube in (chrome, firefox, safari, edge, brave), "
-        "or OPENCLIPS_COOKIES_FILE to an exported cookies.txt.",
+        "YouTube challenged every player client this tried. It is usually "
+        "intermittent, so the same link often works a few minutes later. If it "
+        "persists, set OPENCLIPS_COOKIES_FROM_BROWSER to the browser you watch "
+        "YouTube in (chrome, firefox, safari, edge, brave), or "
+        "OPENCLIPS_COOKIES_FILE to an exported cookies.txt.",
     ),
     (
         "No supported JavaScript runtime",
@@ -292,14 +294,34 @@ def diagnose_download(output: str) -> str:
 
 
 def is_rate_limited(output: str) -> bool:
-    """True when retrying now would only make it worse."""
-    return "HTTP Error 429" in output or "not a bot" in output
+    """True when YouTube is throttling this machine and a pause is the answer."""
+    return "HTTP Error 429" in output
+
+
+def is_bot_checked(output: str) -> bool:
+    """True when YouTube challenged the client rather than the machine.
+
+    Worth separating from a rate limit because the answer is different: a
+    challenge is aimed at the player client that asked, and another client is
+    usually waved through, so there is nothing to wait for.
+    """
+    return "not a bot" in output
+
+
+def needs_patience(output: str) -> bool:
+    """Neither of these is fixed by a newer yt-dlp, so no upgrade is spent."""
+    return is_rate_limited(output) or is_bot_checked(output)
 
 
 # A rate limit usually lapses in a couple of minutes, so it is waited out
 # rather than failing a job that was minutes from starting.
 RATE_LIMIT_ATTEMPTS = 3
 RATE_LIMIT_WAIT = 60.0
+
+# YouTube challenges the web client intermittently. This one is rarely
+# challenged and offers the same formats — 1080p mp4 and 129k m4a — so falling
+# back to it costs nothing in quality and saves asking anyone for cookies.
+FALLBACK_PLAYER_CLIENT = "tv_embedded"
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio"
 VIDEO_FORMAT = "bestvideo[ext=mp4][height<=1080]/best[ext=mp4]"
@@ -364,17 +386,26 @@ def _download_stream(
         return destination
 
     upgraded = False
+    client = ""
     for attempt in range(RATE_LIMIT_ATTEMPTS):
         try:
             return _run_yt_dlp(
-                url, fmt=fmt, destination=destination, label=label, hook=hook, span=span
+                url, fmt=fmt, destination=destination, label=label, hook=hook,
+                span=span, player_client=client,
             )
         except RuntimeError as error:
             last = attempt == RATE_LIMIT_ATTEMPTS - 1
-            if is_rate_limited(str(error)):
-                # The limit is usually a passing squall rather than a wall, so
-                # it is waited out. A newer yt-dlp does not fix it and trying
-                # again straight away is what earned it.
+            output = str(error)
+            if is_bot_checked(output) and not client:
+                # The challenge is aimed at the client that asked, so ask as a
+                # different one. Nothing to wait for.
+                client = FALLBACK_PLAYER_CLIENT
+                if hook is not None:
+                    hook("download", span[0], f"Retrying {label} as a different player…")
+                continue
+            if is_rate_limited(output):
+                # A limit is usually a passing squall rather than a wall, so it
+                # is waited out. Trying again straight away is what earned it.
                 if last:
                     raise
                 wait = RATE_LIMIT_WAIT * (attempt + 1)
@@ -385,9 +416,9 @@ def _download_stream(
                     )
                 time.sleep(wait)
                 continue
-            # Any other failure is usually a YouTube-side change upstream has
+            # Anything else is usually a YouTube-side change upstream has
             # already fixed, so it is worth one upgrade and one more go.
-            if upgraded or last or not _upgrade_yt_dlp():
+            if upgraded or last or needs_patience(output) or not _upgrade_yt_dlp():
                 raise
             upgraded = True
             if hook is not None:
@@ -403,6 +434,7 @@ def _run_yt_dlp(
     label: str,
     hook: ProgressHook | None,
     span: tuple[float, float],
+    player_client: str = "",
 ) -> Path:
     process = subprocess.Popen(
         [
@@ -419,6 +451,8 @@ def _run_yt_dlp(
             "--extractor-retries", "3",
             "--sleep-requests", "1",
             "--ffmpeg-location", binary("ffmpeg"),
+            *(["--extractor-args", f"youtube:player_client={player_client}"]
+              if player_client else []),
             "-o", str(destination), "--", url,
         ],
         stdout=subprocess.PIPE,

@@ -236,8 +236,12 @@ knowing about:
   off further each time. Requests are paced and fragments limited to four per
   stream to avoid provoking it in the first place — audio and video download at
   once, so that is eight in flight, and sixteen was enough to earn the limit.
-- **"Sign in to confirm you're not a bot"** — the download needs to be
-  authenticated. Point the studio at your browser's cookies:
+- **"Sign in to confirm you're not a bot"** — YouTube challenged the player
+  client that asked, not the machine. The download is retried automatically as a
+  different client, which is usually waved through and offers the same formats,
+  so most of these never reach you. If every client is refused, the challenge is
+  usually still intermittent and the same link often works minutes later. For a
+  persistent one, point the studio at your browser's cookies:
 
   ```bash
   export OPENCLIPS_COOKIES_FROM_BROWSER=chrome   # or firefox, safari, edge, brave

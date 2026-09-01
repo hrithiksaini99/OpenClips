@@ -68,11 +68,21 @@ def test_rate_limiting_is_explained_rather_than_dumped() -> None:
     assert pipeline.is_rate_limited(output)
 
 
-def test_the_bot_check_names_the_setting_that_fixes_it() -> None:
-    output = "ERROR: [youtube] Sign in to confirm you\u2019re not a bot. Use --cookies-from-browser"
+def test_the_bot_check_is_told_apart_from_a_rate_limit() -> None:
+    # They need different answers: a limit is aimed at the machine and waited
+    # out, a challenge is aimed at the client and answered by asking as another.
+    challenge = "ERROR: [youtube] Sign in to confirm you\u2019re not a bot."
+    limit = "WARNING: HTTP Error 429: Too Many Requests"
+
+    assert pipeline.is_bot_checked(challenge) and not pipeline.is_rate_limited(challenge)
+    assert pipeline.is_rate_limited(limit) and not pipeline.is_bot_checked(limit)
+    assert pipeline.needs_patience(challenge) and pipeline.needs_patience(limit)
+
+
+def test_the_bot_check_advice_only_arrives_after_the_fallback() -> None:
+    output = "ERROR: [youtube] Sign in to confirm you\u2019re not a bot."
 
     assert "OPENCLIPS_COOKIES_FROM_BROWSER" in pipeline.diagnose_download(output)
-    assert pipeline.is_rate_limited(output)
 
 
 def test_a_missing_runtime_is_explained() -> None:
@@ -187,3 +197,76 @@ def test_a_cached_file_is_reused_without_touching_youtube(
         "https://youtu.be/x", fmt="bestaudio", destination=destination,
         label="audio", hook=None, span=(0.0, 1.0),
     ) == destination
+
+
+def test_a_challenged_download_is_retried_as_another_player(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The challenge is aimed at the client that asked, so there is nothing to
+    # wait for — asking as a different one is the whole fix.
+    clients: list[str] = []
+    slept: list[float] = []
+
+    def run(url: str, *, player_client: str = "", **kwargs: object) -> Path:
+        clients.append(player_client)
+        if not player_client:
+            raise RuntimeError("ERROR: Sign in to confirm you're not a bot.")
+        return tmp_path / "a.m4a"
+
+    monkeypatch.setattr(pipeline, "_run_yt_dlp", run)
+    monkeypatch.setattr(pipeline.time, "sleep", lambda seconds: slept.append(seconds))
+
+    pipeline._download_stream(
+        "https://youtu.be/x", fmt="bestaudio", destination=tmp_path / "a.m4a",
+        label="audio", hook=None, span=(0.0, 1.0),
+    )
+
+    assert clients == ["", pipeline.FALLBACK_PLAYER_CLIENT]
+    assert slept == []
+
+
+def test_a_challenge_the_fallback_cannot_answer_still_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    clients: list[str] = []
+
+    def run(url: str, *, player_client: str = "", **kwargs: object) -> Path:
+        clients.append(player_client)
+        raise RuntimeError("ERROR: Sign in to confirm you're not a bot.")
+
+    monkeypatch.setattr(pipeline, "_run_yt_dlp", run)
+    monkeypatch.setattr(pipeline.time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError, match="not a bot"):
+        pipeline._download_stream(
+            "https://youtu.be/x", fmt="bestaudio", destination=tmp_path / "a.m4a",
+            label="audio", hook=None, span=(0.0, 1.0),
+        )
+
+    assert clients[0] == "" and pipeline.FALLBACK_PLAYER_CLIENT in clients
+
+
+def test_a_challenge_never_triggers_a_yt_dlp_upgrade(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    upgrades: list[int] = []
+    monkeypatch.setattr(pipeline, "_run_yt_dlp", lambda url, **kw: (_ for _ in ()).throw(
+        RuntimeError("ERROR: Sign in to confirm you're not a bot.")))
+    monkeypatch.setattr(pipeline, "_upgrade_yt_dlp", lambda: upgrades.append(1) or True)
+    monkeypatch.setattr(pipeline.time, "sleep", lambda _s: None)
+
+    with pytest.raises(RuntimeError):
+        pipeline._download_stream(
+            "https://youtu.be/x", fmt="bestaudio", destination=tmp_path / "a.m4a",
+            label="audio", hook=None, span=(0.0, 1.0),
+        )
+
+    assert upgrades == []
+
+
+def test_the_player_client_reaches_yt_dlp_as_an_extractor_arg() -> None:
+    import inspect
+
+    source = inspect.getsource(pipeline._run_yt_dlp)
+
+    assert "youtube:player_client=" in source
