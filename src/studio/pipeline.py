@@ -602,39 +602,61 @@ def _shared_model_workers(model_mb: float, requested: int) -> int:
     return max(1, min(requested, affordable))
 
 
+def _split_wav(source: Path, into: Path, seconds: float) -> list[tuple[Path, float]]:
+    """Cut a WAV into fixed-length pieces, returning each with its start offset.
+
+    One ffmpeg pass with the segment muxer and a stream copy, so a 4.5-hour file
+    is split in a second or two. The pieces are real short files: each is handed
+    to Whisper whole, which is the point — see `transcribe`.
+    """
+    into.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            binary("ffmpeg"), "-nostdin", "-v", "error", "-y", "-i", str(source),
+            "-f", "segment", "-segment_time", f"{seconds:.0f}", "-c", "copy",
+            str(into / "part-%04d.wav"),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=1800,
+    )
+    parts = sorted(into.glob("part-*.wav"))
+    return [(part, index * seconds) for index, part in enumerate(parts)]
+
+
 def transcribe(
     video: Path, model_size: str, hook: ProgressHook, workers: int = 4
 ) -> list[Word]:
-    """Transcribe audio slices concurrently against a single shared model.
+    """Transcribe fixed-length audio pieces concurrently against one model.
 
-    Earlier this used a process pool, which gave every worker its own copy of
-    the model: a `small` worker measures ~845 MB before it transcribes a single
-    second, so six of them exhausted memory and hard-crashed the machine.
-    CTranslate2 shares model weights across its internal workers and releases
-    the GIL during compute, so threads give the same parallelism for roughly the
-    memory of one model (measured: 838 MB for four workers, versus 3.4 GB).
+    The audio is physically cut into pieces and each piece transcribed on its
+    own. The obvious-looking alternative — one model, `clip_timestamps` to point
+    each worker at a range of the whole file — does not work:
+    WhisperModel.transcribe decodes the entire file and extracts features for
+    all of it on every call, then only seeks past the start offset, so on a
+    multi-hour episode four workers each grind through most of the file and the
+    first result never lands. Real short files avoid all of that.
+
+    Threads rather than processes for the model: a `small` worker measures
+    ~845 MB before it transcribes a second, so a process pool exhausted memory
+    and crashed the machine. CTranslate2 shares weights across its internal
+    workers and releases the GIL during compute (measured: 838 MB for four
+    workers against 3.4 GB).
     """
     from faster_whisper import WhisperModel
 
     hook("transcribe", _stage_progress("transcribe", 0.02), "Extracting audio…")
     with tempfile.TemporaryDirectory(prefix="openclips-audio-") as temporary:
-        audio = Path(temporary) / "audio.wav"
+        root = Path(temporary)
+        audio = root / "audio.wav"
         duration = _extract_audio(video, audio)
+        pieces = _split_wav(audio, root / "parts", CHUNK_SECONDS)
+        audio.unlink(missing_ok=True)  # the pieces are all that is needed now
 
-        bounds: list[tuple[float, float]] = []
-        cursor = 0.0
-        while cursor < duration:
-            bounds.append((cursor, min(cursor + CHUNK_SECONDS, duration)))
-            cursor += CHUNK_SECONDS
-
-        parallel = max(1, min(workers, _MODEL_WORKER_CAP.get(model_size, 4), len(bounds)))
+        parallel = max(1, min(workers, _MODEL_WORKER_CAP.get(model_size, 4), len(pieces)))
         parallel = _shared_model_workers(MODEL_FOOTPRINT_MB.get(model_size, 1200), parallel)
 
-        hook(
-            "transcribe",
-            _stage_progress("transcribe", 0.04),
-            f"Loading {model_size} model…",
-        )
+        hook("transcribe", _stage_progress("transcribe", 0.04), f"Loading {model_size} model…")
         model = WhisperModel(
             model_size,
             device="cpu",
@@ -648,17 +670,12 @@ def transcribe(
             f"Transcribing {duration / 60:.0f} min with {model_size} x {parallel}…",
         )
 
-        # `model` is bound as a default rather than closed over: it is deleted
-        # below to release its memory, and a closure would quietly make that
-        # ordering load-bearing.
+        # `model` is a default arg rather than a closure: it is deleted below to
+        # free its memory, and a closure would make that ordering load-bearing.
         def run(index: int, model: Any = model) -> tuple[int, list[dict[str, Any]]]:
-            begin, finish = bounds[index]
+            part, offset = pieces[index]
             segments, _info = model.transcribe(
-                str(audio),
-                word_timestamps=True,
-                vad_filter=True,
-                beam_size=1,
-                clip_timestamps=[begin, finish],
+                str(part), word_timestamps=True, vad_filter=True, beam_size=1
             )
             words: list[dict[str, Any]] = []
             for segment in segments:
@@ -666,27 +683,27 @@ def transcribe(
                     text = str(raw.word).strip()
                     if not text:
                         continue
-                    begin_at = float(raw.start)
+                    start = float(raw.start) + offset
                     words.append(
                         {
                             "text": text,
-                            "start": begin_at,
-                            "end": max(begin_at, float(raw.end)),
+                            "start": start,
+                            "end": max(start, float(raw.end) + offset),
                             "probability": float(getattr(raw, "probability", 1.0)),
                         }
                     )
             return index, words
 
-        collected: list[list[dict[str, Any]]] = [[] for _ in bounds]
+        collected: list[list[dict[str, Any]]] = [[] for _ in pieces]
         done = 0
         with ThreadPoolExecutor(max_workers=parallel) as pool:
-            for index, chunk_words in pool.map(run, range(len(bounds))):
+            for index, chunk_words in pool.map(run, range(len(pieces))):
                 collected[index] = chunk_words
                 done += 1
                 hook(
                     "transcribe",
-                    _stage_progress("transcribe", 0.06 + 0.94 * (done / len(bounds))),
-                    f"Transcribed {done}/{len(bounds)} segments",
+                    _stage_progress("transcribe", 0.06 + 0.94 * (done / len(pieces))),
+                    f"Transcribed {done}/{len(pieces)} segments",
                 )
         del model
 
