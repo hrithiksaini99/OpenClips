@@ -31,8 +31,12 @@ _SLOT = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # Nothing is running yet, so any job folder without clips is the remains of
-    # a run that failed or one whose clips have all been posted.
+    # A fresh process has no worker threads, so any job still marked running was
+    # killed mid-run. Flag those before pruning, or they vanish from the UI with
+    # no trace of what happened.
+    interrupted = pipeline.recover_interrupted_jobs()
+    if interrupted:
+        publisher.note_error(f"{interrupted} job(s) were interrupted and can be restarted")
     pipeline.prune_empty_jobs()
     # Anything left "uploading" belongs to a process that is no longer running,
     # so it is returned to the queue (reconciled against YouTube first).

@@ -1008,9 +1008,43 @@ def disk_usage() -> dict[str, int]:
     def total(root: Path) -> int:
         if not root.is_dir():
             return 0
-        return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
+        seen = 0
+        for path in root.rglob("*"):
+            try:
+                if path.is_file():
+                    seen += path.stat().st_size
+            except OSError:
+                # yt-dlp churns through thousands of fragment files during a
+                # download, so a path can vanish between rglob and stat. It is
+                # a rounding error against a multi-gigabyte source either way.
+                continue
+        return seen
 
     return {"media": total(MEDIA_DIR), "clips": total(CLIPS_DIR)}
+
+
+def recover_interrupted_jobs(active: set[str] | None = None) -> int:
+    """Mark jobs whose worker is gone as interrupted. Returns how many.
+
+    A job's state says "running" until its thread writes otherwise, and a
+    process that was killed never got to. On a fresh start nothing is running,
+    so any job still in a working state was interrupted. The downloaded audio is
+    cached under the video id, so re-running the same link resumes from there
+    rather than from zero.
+    """
+    running = active or set()
+    fixed = 0
+    for job in list_jobs():
+        if job.id in running or job.status not in ("running", "queued"):
+            continue
+        job.status = "error"
+        job.error = (
+            "Interrupted — the server stopped mid-run. The download is cached, "
+            "so starting the same link again picks up from there."
+        )
+        write_state(job)
+        fixed += 1
+    return fixed
 
 
 def prune_empty_jobs(keep: set[str] | None = None) -> int:
@@ -1023,10 +1057,11 @@ def prune_empty_jobs(keep: set[str] | None = None) -> int:
     process may have left behind.
     """
     protected = keep or set()
+    empty = [job for job in list_jobs() if job.id not in protected and not job.clips]
+    # list_jobs is newest first; the first empty job is the one still worth
+    # looking at (a just-failed run), the rest are stale rows.
     removed = 0
-    for job in list_jobs():
-        if job.id in protected or job.clips:
-            continue
+    for job in empty[1:]:
         clear_job(job.id)
         removed += 1
     return removed

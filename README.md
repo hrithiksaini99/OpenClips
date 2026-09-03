@@ -219,10 +219,15 @@ CTranslate2 has no Metal backend, so the CPU path is used there.
 
 ## The job list
 
-Only runs that produced clips are kept. A run that failed, and one whose clips
-have all been posted and reclaimed, leave an empty folder behind, and those are
-cleared out when the server starts and when the next run begins — not the moment
-they fail, so an error stays on screen until you start something else.
+Only runs that produced clips are kept, plus the most recent empty one so a
+fresh failure stays visible. Older empty folders — a run that failed, or one
+whose clips have all been posted and reclaimed — are cleared when the server
+starts and when the next run begins.
+
+If the server is stopped while a run is in progress, that job is marked
+interrupted on the next start rather than left saying "running" forever. The
+downloaded audio is cached under the video id, so starting the same link again
+resumes from there rather than re-downloading.
 
 ## When YouTube refuses the download
 

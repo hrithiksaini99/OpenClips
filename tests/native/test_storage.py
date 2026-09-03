@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from studio import pipeline, publisher
 
 
@@ -135,20 +137,49 @@ def test_job_state_is_written_whole_or_not_at_all(studio_home: Path) -> None:
     assert list(pipeline.CLIPS_DIR.glob(".state.json.*")) == []
 
 
-def test_a_job_with_no_clips_is_not_kept(
+def test_stale_empty_jobs_are_pruned_but_the_newest_is_kept(
     studio_home: Path, make_job: Callable[..., pipeline.JobState]
 ) -> None:
-    # A failed run and one whose clips have all been posted both leave an empty
-    # folder that shows up in the job list as a row leading nowhere.
-    failed = pipeline.JobState(id="failed", source="https://youtu.be/x", status="error",
-                               error="RuntimeError: rate limited")
-    pipeline.write_state(failed)
-    make_job(job_id="kept", clips=2)
+    # The user does not want a history of failures piling up, but a run that
+    # just failed should still be there to look at.
+    import time as _time
+    for index in range(3):
+        state = pipeline.JobState(id=f"failed{index}", source="https://youtu.be/x",
+                                  status="error", error="rate limited")
+        state.created_at = _time.time() + index  # failed2 is newest
+        pipeline.write_state(state)
+    make_job(job_id="real", clips=2)
 
     removed = pipeline.prune_empty_jobs()
 
-    assert removed == 1
-    assert [job.id for job in pipeline.list_jobs()] == ["kept"]
+    kept = {job.id for job in pipeline.list_jobs()}
+    assert removed == 2
+    assert kept == {"real", "failed2"}
+
+
+def test_an_interrupted_job_is_flagged_not_deleted(
+    studio_home: Path
+) -> None:
+    # Its process is gone but its state still says running; without this it
+    # vanishes on the next start with no sign of what happened.
+    stuck = pipeline.JobState(id="stuck", source="https://youtu.be/x", status="running",
+                              progress=0.35, message="Transcribing…")
+    pipeline.write_state(stuck)
+
+    assert pipeline.recover_interrupted_jobs() == 1
+
+    recovered = pipeline.read_state("stuck")
+    assert recovered is not None
+    assert recovered.status == "error"
+    assert "cached" in recovered.error
+
+
+def test_a_job_that_is_genuinely_running_is_left_alone(studio_home: Path) -> None:
+    live = pipeline.JobState(id="live", source="https://youtu.be/x", status="running")
+    pipeline.write_state(live)
+
+    assert pipeline.recover_interrupted_jobs(active={"live"}) == 0
+    assert pipeline.read_state("live").status == "running"  # type: ignore[union-attr]
 
 
 def test_a_job_still_running_is_never_pruned(studio_home: Path) -> None:
@@ -166,3 +197,27 @@ def test_pruning_an_already_clean_list_does_nothing(
 
     assert pipeline.prune_empty_jobs() == 0
     assert len(pipeline.list_jobs()) == 1
+
+
+
+def test_disk_usage_survives_a_file_vanishing_mid_scan(
+    studio_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # yt-dlp deletes fragment files constantly during a download, so a path can
+    # disappear between being listed and being stat-ed.
+    (pipeline.MEDIA_DIR / "source").mkdir(parents=True)
+    real = pipeline.MEDIA_DIR / "source" / "kept.mp4"
+    real.write_bytes(b"\0" * 5000)
+    ghost = pipeline.MEDIA_DIR / "source" / "frag.part"
+    ghost.write_bytes(b"\0" * 100)
+
+    real_stat = Path.stat
+
+    def flaky_stat(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if self.name == "frag.part":
+            raise FileNotFoundError(self)
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    assert pipeline.disk_usage()["media"] == 5000
