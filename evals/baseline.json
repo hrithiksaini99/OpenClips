@@ -1,0 +1,571 @@
+{
+  "suite": "suite",
+  "agent": "evals/adapter.py:run",
+  "started_at": "2026-10-25T19:06:53+00:00",
+  "duration_ms": 117.67,
+  "pass_rate": 1.0,
+  "passed": 8,
+  "total": 8,
+  "tokens": 0,
+  "cost_usd": 0.0,
+  "failure_histogram": {
+    "answer_quality": 1
+  },
+  "cases": [
+    {
+      "case_id": "hook-heavy-selects-both-hooks",
+      "tags": [
+        "hook-heavy",
+        "selection"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_count",
+          "passed": true,
+          "score": 1.0,
+          "detail": "2 clips within [2, 4]",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "contains",
+          "passed": true,
+          "score": 1.0,
+          "detail": "found ['biggest mistake founders make']",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "contains",
+          "passed": true,
+          "score": 1.0,
+          "detail": "found ['nobody tells you that the real reason startups die']",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clips_terminated",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip ends on terminal punctuation",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clips_titled",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip has a title",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "[1] The biggest mistake founders make is hiring for passion instead of\u2026\nThe biggest mistake founders make is hiring for passion instead of proof of work. That single decision quietly destroys more companies than bad pricing ever will. Here is the thing about hiring, you cannot interview your way to certainty. You can only watch what someone has already shipped under pressure. So we started asking every candidate for one artifact and one failure story. The artifact shows craft and the story shows whether they can learn. Most people think the answer is more process, and that is exactly backwards. Process is what you add when you do not trust the people you hired.\n\n[2] Nobody tells you that the real reason startups die is running out\u2026\nNobody tells you that the real reason startups die is running out of time, not money. You can always raise more money, you cannot raise more months of your life. That framing changed how we plan every quarter after that conversation. We now ask what we would cut if we had half the time and the same ambition. The answer is usually the thing nobody wants to own, which is why it survives. Look at the roadmap and find the project with no clear owner and no clear metric. That project is not a priority, it is a hiding place for a decision. Kill it and watch how much faster the rest of the quarter moves.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 11.414,
+            "end": 50.264,
+            "duration": 38.85,
+            "score": 10.7776,
+            "title": "The biggest mistake founders make is hiring for passion instead of\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 2,
+            "last_sentence": 9
+          },
+          "error": null,
+          "latency_ms": 0.0
+        },
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 71.329,
+            "end": 115.179,
+            "duration": 43.85,
+            "score": 11.2734,
+            "title": "Nobody tells you that the real reason startups die is running out\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 14,
+            "last_sentence": 21
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 22.08670800064283,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    },
+    {
+      "case_id": "hook-heavy-structure",
+      "tags": [
+        "hook-heavy",
+        "structure"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_durations",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip within [28.0, 75.0]s",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clips_do_not_overlap",
+          "passed": true,
+          "score": 1.0,
+          "detail": "all clips at least 20.0s apart",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clips_ordered",
+          "passed": true,
+          "score": 1.0,
+          "detail": "clips are in playback order",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "max_tool_calls",
+          "passed": true,
+          "score": 1.0,
+          "detail": "2 tool calls",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "[1] The biggest mistake founders make is hiring for passion instead of\u2026\nThe biggest mistake founders make is hiring for passion instead of proof of work. That single decision quietly destroys more companies than bad pricing ever will. Here is the thing about hiring, you cannot interview your way to certainty. You can only watch what someone has already shipped under pressure. So we started asking every candidate for one artifact and one failure story. The artifact shows craft and the story shows whether they can learn. Most people think the answer is more process, and that is exactly backwards. Process is what you add when you do not trust the people you hired.\n\n[2] Nobody tells you that the real reason startups die is running out\u2026\nNobody tells you that the real reason startups die is running out of time, not money. You can always raise more money, you cannot raise more months of your life. That framing changed how we plan every quarter after that conversation. We now ask what we would cut if we had half the time and the same ambition. The answer is usually the thing nobody wants to own, which is why it survives. Look at the roadmap and find the project with no clear owner and no clear metric. That project is not a priority, it is a hiding place for a decision. Kill it and watch how much faster the rest of the quarter moves.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 11.414,
+            "end": 50.264,
+            "duration": 38.85,
+            "score": 10.7776,
+            "title": "The biggest mistake founders make is hiring for passion instead of\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 2,
+            "last_sentence": 9
+          },
+          "error": null,
+          "latency_ms": 0.0
+        },
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 71.329,
+            "end": 115.179,
+            "duration": 43.85,
+            "score": 11.2734,
+            "title": "Nobody tells you that the real reason startups die is running out\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 14,
+            "last_sentence": 21
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 21.266499999910593,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    },
+    {
+      "case_id": "hook-heavy-scores-above-floor",
+      "tags": [
+        "hook-heavy",
+        "scoring"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clips_min_score",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip scores at least 9.5",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clip_count",
+          "passed": true,
+          "score": 1.0,
+          "detail": "2 clips within [1, 1000000]",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "[1] The biggest mistake founders make is hiring for passion instead of\u2026\nThe biggest mistake founders make is hiring for passion instead of proof of work. That single decision quietly destroys more companies than bad pricing ever will. Here is the thing about hiring, you cannot interview your way to certainty. You can only watch what someone has already shipped under pressure. So we started asking every candidate for one artifact and one failure story. The artifact shows craft and the story shows whether they can learn. Most people think the answer is more process, and that is exactly backwards. Process is what you add when you do not trust the people you hired.\n\n[2] Nobody tells you that the real reason startups die is running out\u2026\nNobody tells you that the real reason startups die is running out of time, not money. You can always raise more money, you cannot raise more months of your life. That framing changed how we plan every quarter after that conversation. We now ask what we would cut if we had half the time and the same ambition. The answer is usually the thing nobody wants to own, which is why it survives. Look at the roadmap and find the project with no clear owner and no clear metric. That project is not a priority, it is a hiding place for a decision. Kill it and watch how much faster the rest of the quarter moves.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 11.414,
+            "end": 50.264,
+            "duration": 38.85,
+            "score": 10.7776,
+            "title": "The biggest mistake founders make is hiring for passion instead of\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 2,
+            "last_sentence": 9
+          },
+          "error": null,
+          "latency_ms": 0.0
+        },
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 71.329,
+            "end": 115.179,
+            "duration": 43.85,
+            "score": 11.2734,
+            "title": "Nobody tells you that the real reason startups die is running out\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 14,
+            "last_sentence": 21
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 20.662791000177094,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    },
+    {
+      "case_id": "hook-heavy-respects-max-clips",
+      "tags": [
+        "hook-heavy",
+        "parameters"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_count",
+          "passed": true,
+          "score": 1.0,
+          "detail": "1 clips within [1, 1]",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "[1] Nobody tells you that the real reason startups die is running out\u2026\nNobody tells you that the real reason startups die is running out of time, not money. You can always raise more money, you cannot raise more months of your life. That framing changed how we plan every quarter after that conversation. We now ask what we would cut if we had half the time and the same ambition. The answer is usually the thing nobody wants to own, which is why it survives. Look at the roadmap and find the project with no clear owner and no clear metric. That project is not a priority, it is a hiding place for a decision. Kill it and watch how much faster the rest of the quarter moves.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 71.329,
+            "end": 115.179,
+            "duration": 43.85,
+            "score": 11.2734,
+            "title": "Nobody tells you that the real reason startups die is running out\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 14,
+            "last_sentence": 21
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 21.1122910004633,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    },
+    {
+      "case_id": "hook-heavy-respects-duration-bounds",
+      "tags": [
+        "hook-heavy",
+        "parameters"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_count",
+          "passed": true,
+          "score": 1.0,
+          "detail": "2 clips within [1, 1000000]",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clip_durations",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip within [28.0, 40.0]s",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "[1] The biggest mistake founders make is hiring for passion instead of\u2026\nThe biggest mistake founders make is hiring for passion instead of proof of work. That single decision quietly destroys more companies than bad pricing ever will. Here is the thing about hiring, you cannot interview your way to certainty. You can only watch what someone has already shipped under pressure. So we started asking every candidate for one artifact and one failure story. The artifact shows craft and the story shows whether they can learn. Most people think the answer is more process, and that is exactly backwards. Process is what you add when you do not trust the people you hired.\n\n[2] Nobody tells you that the real reason startups die is running out\u2026\nNobody tells you that the real reason startups die is running out of time, not money. You can always raise more money, you cannot raise more months of your life. That framing changed how we plan every quarter after that conversation. We now ask what we would cut if we had half the time and the same ambition. The answer is usually the thing nobody wants to own, which is why it survives. Look at the roadmap and find the project with no clear owner and no clear metric. That project is not a priority, it is a hiding place for a decision.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 11.414,
+            "end": 50.264,
+            "duration": 38.85,
+            "score": 10.7776,
+            "title": "The biggest mistake founders make is hiring for passion instead of\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 2,
+            "last_sentence": 9
+          },
+          "error": null,
+          "latency_ms": 0.0
+        },
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 71.329,
+            "end": 110.186,
+            "duration": 38.857,
+            "score": 11.1353,
+            "title": "Nobody tells you that the real reason startups die is running out\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 14,
+            "last_sentence": 20
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 5.933333000029961,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    },
+    {
+      "case_id": "filler-heavy-structure",
+      "tags": [
+        "filler-heavy",
+        "structure"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_count",
+          "passed": true,
+          "score": 1.0,
+          "detail": "2 clips within [0, 3]",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clip_durations",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip within [28.0, 75.0]s",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clips_do_not_overlap",
+          "passed": true,
+          "score": 1.0,
+          "detail": "all clips at least 20.0s apart",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "clips_terminated",
+          "passed": true,
+          "score": 1.0,
+          "detail": "every clip ends on terminal punctuation",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "[1] Um, so, you know, I guess we should probably start talking about\u2026\nUm, so, you know, I guess we should probably start talking about the thing. Yeah, I mean, like, it is kind of a long story, you know what I mean. So basically, um, we were sort of working on this, like, project for a while. And, uh, I do not really remember, like, exactly when it started, to be honest. You know, it was just sort of, um, one of those things that happens, I guess.\n\n[2] Like, we could talk about it more, but, uh, there is not much else.\nI mean, like, we could talk about it more, but, uh, there is not much else. You know, it is kind of funny, sort of, in a way, looking back on it now. So, basically, um, I think we learned, like, a little bit, maybe, kind of. And, uh, you know, it was just one of those things, I mean, really. Like, I do not know, maybe it was, sort of, the wrong time, you know. Um, so, yeah, anyway, that is, like, basically the story, I guess. I mean, you know, we could, uh, sort of try it again at some point. But, like, honestly, I am not really sure, you know, if that makes sense.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 0.0,
+            "end": 28.514,
+            "duration": 28.514,
+            "score": 4.0996,
+            "title": "Um, so, you know, I guess we should probably start talking about\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 0,
+            "last_sentence": 4
+          },
+          "error": null,
+          "latency_ms": 0.0
+        },
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 49.936,
+            "end": 94.143,
+            "duration": 44.207,
+            "score": 6.5623,
+            "title": "Like, we could talk about it more, but, uh, there is not much else.",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 9,
+            "last_sentence": 16
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 14.292042000306537,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    },
+    {
+      "case_id": "filler-heavy-yields-nothing",
+      "tags": [
+        "filler-heavy",
+        "known-gap"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_count",
+          "passed": false,
+          "score": 0.0,
+          "detail": "2 clips outside [0, 0]",
+          "failure_class": "answer_quality",
+          "optional": true
+        }
+      ],
+      "output": "[1] Um, so, you know, I guess we should probably start talking about\u2026\nUm, so, you know, I guess we should probably start talking about the thing. Yeah, I mean, like, it is kind of a long story, you know what I mean. So basically, um, we were sort of working on this, like, project for a while. And, uh, I do not really remember, like, exactly when it started, to be honest. You know, it was just sort of, um, one of those things that happens, I guess.\n\n[2] Like, we could talk about it more, but, uh, there is not much else.\nI mean, like, we could talk about it more, but, uh, there is not much else. You know, it is kind of funny, sort of, in a way, looking back on it now. So, basically, um, I think we learned, like, a little bit, maybe, kind of. And, uh, you know, it was just one of those things, I mean, really. Like, I do not know, maybe it was, sort of, the wrong time, you know. Um, so, yeah, anyway, that is, like, basically the story, I guess. I mean, you know, we could, uh, sort of try it again at some point. But, like, honestly, I am not really sure, you know, if that makes sense.",
+      "spans": [
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 0.0,
+            "end": 28.514,
+            "duration": 28.514,
+            "score": 4.0996,
+            "title": "Um, so, you know, I guess we should probably start talking about\u2026",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 0,
+            "last_sentence": 4
+          },
+          "error": null,
+          "latency_ms": 0.0
+        },
+        {
+          "type": "tool_call",
+          "name": "select_clip",
+          "input": {
+            "start": 49.936,
+            "end": 94.143,
+            "duration": 44.207,
+            "score": 6.5623,
+            "title": "Like, we could talk about it more, but, uh, there is not much else.",
+            "terminated": true
+          },
+          "output": {
+            "first_sentence": 9,
+            "last_sentence": 16
+          },
+          "error": null,
+          "latency_ms": 0.0
+        }
+      ],
+      "latency_ms": 11.456750000434113,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": [
+        "answer_quality"
+      ]
+    },
+    {
+      "case_id": "short-episode-yields-nothing",
+      "tags": [
+        "short",
+        "edge-case"
+      ],
+      "passed": true,
+      "grades": [
+        {
+          "grader": "clip_count",
+          "passed": true,
+          "score": 1.0,
+          "detail": "0 clips within [0, 0]",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "max_tool_calls",
+          "passed": true,
+          "score": 1.0,
+          "detail": "0 tool calls",
+          "failure_class": null,
+          "optional": false
+        },
+        {
+          "grader": "exact",
+          "passed": true,
+          "score": 1.0,
+          "detail": "output matched exactly",
+          "failure_class": null,
+          "optional": false
+        }
+      ],
+      "output": "(no clips selected)",
+      "spans": [],
+      "latency_ms": 0.5351250001695007,
+      "tokens": 0,
+      "cost_usd": 0.0,
+      "error": null,
+      "failure_classes": []
+    }
+  ]
+}
