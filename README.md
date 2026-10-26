@@ -430,6 +430,26 @@ against the queue entry and never fails the post.
 Worth knowing either way: a Shorts thumbnail never shows in the vertical Shorts
 feed. It shows in search, the channel grid, the Shorts shelf and subscriptions.
 
+## Tests and evals
+
+`pytest` covers the pipeline's units and its HTTP surface. If a change alters
+*which clips* the selector chooses, the unit tests will not notice — they assert
+how a score is computed, not what comes out. `evals/` runs the real
+`load_sentences` → `find_clips` path over fixed transcripts and gates CI on the
+clips changing: duration bounds, non-overlap, sentence-complete endings, and the
+strongest hook still being selected.
+
+```bash
+pip install -e ../agent-eval          # the harness, once
+PYTHONPATH=src python -m agenteval run --suite evals/suite.jsonl \
+  --agent evals/adapter.py:run --baseline evals/baseline.json \
+  --report evals/report.md --fail-on-regression
+```
+
+See [`evals/README.md`](evals/README.md) for what is covered, and the two gaps
+the first run found (no minimum score, and results ordered by start rather than
+by score).
+
 ## Repository layout
 
 ```
@@ -437,6 +457,7 @@ src/studio/      the native pipeline described above
 src/openclips/   an earlier Docker/PostgreSQL/Redis service with a review
                  dashboard and publishing queues; independent of src/studio
 web/index.html   the browser UI
+evals/           clip-selection eval suite and the committed baseline
 clips/           generated clips and the publish queue (git-ignored)
 media/           downloaded sources, cached by video id (git-ignored)
 config/          YouTube OAuth client and token (git-ignored)
